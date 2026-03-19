@@ -1,0 +1,118 @@
+project_id = "euydrdzayvjahstvmwoj"
+
+[auth]
+site_url = "https://portal.thunderpro.co"
+
+[auth.email]
+# Configure OTP/token expiration time (in seconds)
+# Default is 3600 (1 hour), set to 24 hours (86400) for password reset links
+# This prevents tokens from expiring too quickly
+otp_expiry = 86400
+
+[functions.revenuecat-webhook]
+verify_jwt = false
+
+[functions.send-walkthrough-cancellation]
+verify_jwt = false
+
+[functions.send-cancellation-samples]
+verify_jwt = false
+
+[functions.send-invoice-reminders]
+verify_jwt = false
+
+[functions.send-employee-sms]
+verify_jwt = false
+
+[functions.send-employee-otp]
+verify_jwt = false
+
+[functions.verify-employee-otp]
+verify_jwt = false
+
+[functions.get-employee-by-id]
+verify_jwt = false
+
+[functions.get-scheduled-shifts]
+verify_jwt = false
+
+[functions.employee-clock-action]
+verify_jwt = false
+
+[functions.get-active-clock-session]
+verify_jwt = false
+
+[functions.get-employee-time-history]
+verify_jwt = false
+
+[functions.get-last-paid-period]
+verify_jwt = false
+
+[functions.send-estimate-email]
+verify_jwt = true
+
+[functions.accept-estimate]
+verify_jwt = false
+
+[functions.download-estimate-pdf]
+verify_jwt = false
+
+[functions.download-appointment-pdf]
+verify_jwt = false
+
+[functions.send-booking-emails]
+verify_jwt = false
+
+[functions.send-appointment-reminders]
+verify_jwt = false
+
+[functions.send-appointment-emails]
+verify_jwt = true
+
+[functions.send-clock-notifications]
+verify_jwt = false
+
+[functions.send-invoice-email]
+verify_jwt = false
+
+[functions.process-invoice-payment]
+verify_jwt = false
+
+[functions.download-invoice-pdf]
+verify_jwt = false
+
+[functions.send-verification-email]
+verify_jwt = false
+
+[functions.send-invoice-sms]
+verify_jwt = false
+
+[functions.send-password-reset-email]
+verify_jwt = false
+
+[functions.send-sample-emails]
+verify_jwt = false
+
+[functions.send-payment-sample-emails]
+verify_jwt = false
+
+[functions.mark-viewed]
+verify_jwt = false
+
+[functions.send-daily-sales-report]
+verify_jwt = false
+
+[functions.send-walkthrough-confirmation]
+verify_jwt = false
+
+[functions.send-walkthrough-reminders]
+verify_jwt = false
+
+[functions.send-start-walkthrough-samples]
+verify_jwt = false
+
+[functions.send-completion-walkthrough-samples]
+verify_jwt = false
+
+[functions.handle-email-bounce]
+verify_jwt = false
