@@ -1,3 +1,7 @@
+#DEPLOY SUPABASE NEW PROJECT FOLDER
+scp -r /Users/carloszavala/Desktop/programacion/thunderpro/thunder_supabase/supabase thunderpro.co:/home/admin/thunder_supabase
+
+
 #CONNECT TO DB
 docker exec -it supabase_db_euydrdzayvjahstvmwoj psql -U postgres -d postgres
 

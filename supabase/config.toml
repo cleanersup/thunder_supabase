@@ -51,6 +51,9 @@ verify_jwt = false
 [functions.send-estimate-email]
 verify_jwt = true
 
+[functions.generate-company-description]
+verify_jwt = true
+
 [functions.accept-estimate]
 verify_jwt = false
 
