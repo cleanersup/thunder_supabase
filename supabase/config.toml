@@ -60,6 +60,12 @@ verify_jwt = false
 [functions.download-estimate-pdf]
 verify_jwt = false
 
+[functions.download-contract-pdf]
+verify_jwt = false
+
+[functions.send-contract-email]
+verify_jwt = true
+
 [functions.download-appointment-pdf]
 verify_jwt = false
 
