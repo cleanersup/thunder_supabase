@@ -1,0 +1,171 @@
+import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.76.1";
+import * as Sentry from "npm:@sentry/deno";
+
+const corsHeaders: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
+Sentry.init({
+  dsn: "https://ce035a76b6157a602d88c53eab6570e4@o4509804047958016.ingest.us.sentry.io/4510552540971008",
+  environment: Deno.env.get("SUPABASE_URL")?.includes("staging") ? "staging" : "production",
+  tracesSampleRate: 0.1,
+});
+
+function htmlPage(title: string, message: string, success: boolean): string {
+  const iconBg = success
+    ? "linear-gradient(135deg, #10b981 0%, #059669 100%)"
+    : "#6b7280";
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container {
+      background: white;
+      border-radius: 16px;
+      padding: 48px 32px;
+      max-width: 500px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+    }
+    .icon {
+      width: 80px;
+      height: 80px;
+      background: ${iconBg};
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+      font-size: 40px;
+      color: white;
+    }
+    h1 { color: #1e3a8a; font-size: 26px; margin-bottom: 16px; }
+    p { color: #555; font-size: 16px; line-height: 1.6; margin-bottom: 16px; }
+    .footer {
+      color: #999;
+      font-size: 14px;
+      margin-top: 24px;
+      padding-top: 24px;
+      border-top: 1px solid #e5e7eb;
+    }
+    .footer a { color: #3b82f6; text-decoration: none; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="icon">${success ? "✓" : "!"}</div>
+    <h1>${title}</h1>
+    <p>${message}</p>
+    <div class="footer">
+      <p>© 2024 Thunder Pro Inc.<br>
+      <a href="https://www.thunderpro.co" target="_blank" rel="noopener">www.thunderpro.co</a></p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+serve(async (req) => {
+  return await Sentry.withScope(async () => {
+    Sentry.setTag("function", "accept-contract");
+    if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+
+    try {
+      const url = new URL(req.url);
+      const contractId = url.searchParams.get("id");
+
+      if (!contractId) {
+        return new Response(htmlPage("Missing link", "This acceptance link is invalid.", false), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+      const { data: row, error: fetchError } = await supabase
+        .from("contracts")
+        .select("id, status")
+        .eq("id", contractId)
+        .maybeSingle();
+
+      if (fetchError || !row) {
+        console.error("accept-contract fetch:", fetchError);
+        return new Response(
+          htmlPage("Contract not found", "We could not find this agreement. Please contact the company that sent it.", false),
+          { status: 404, headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8" } },
+        );
+      }
+
+      const status = String(row.status || "");
+
+      if (status === "Active") {
+        return new Response(
+          htmlPage(
+            "Already accepted",
+            "This contract has already been accepted.",
+            true,
+          ),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8" } },
+        );
+      }
+
+      if (!["Sent", "Pending"].includes(status)) {
+        const msg = status === "Draft"
+          ? "This agreement is not available for acceptance yet."
+          : status === "Expired"
+          ? "This agreement has expired. Please contact the service provider."
+          : "This agreement can no longer be accepted online. Please contact the service provider.";
+        return new Response(
+          htmlPage("Unable to accept", msg, false),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8" } },
+        );
+      }
+
+      const now = new Date().toISOString();
+      const { error: updateError } = await supabase
+        .from("contracts")
+        .update({ status: "Active", updated_at: now })
+        .eq("id", contractId);
+
+      if (updateError) {
+        console.error("accept-contract update:", updateError);
+        throw updateError;
+      }
+
+      return new Response(
+        htmlPage(
+          "Contract accepted",
+          "Thank you for accepting this service agreement. The provider has been notified and will follow up with next steps.",
+          true,
+        ),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8" } },
+      );
+    } catch (e: unknown) {
+      Sentry.captureException(e);
+      console.error("accept-contract:", e);
+      return new Response(
+        htmlPage("Something went wrong", "We could not process your request. Please try again or contact support.", false),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8" } },
+      );
+    }
+  });
+});

@@ -26,14 +26,18 @@ function formatDate(d: string | null | undefined): string {
   }
 }
 
-/** Same layout as send-estimate-email residential client template (header, sections, Download PDF, footer). */
+/** Same layout as send-estimate-email client template (header, sections, Accept + Download PDF, tracking pixel, footer). */
 function generateContractClientEmailHtml(
   contract: Record<string, unknown>,
   companyName: string,
   publicSupabaseUrl: string,
 ): string {
   const token = contract.public_share_token || contract.id;
+  const contractId = String(contract.id ?? "");
   const pdfUrl = `${publicSupabaseUrl}/functions/v1/download-contract-pdf?token=${token}`;
+  const acceptUrl = `${publicSupabaseUrl}/functions/v1/accept-contract?id=${encodeURIComponent(contractId)}`;
+  const trackingPixelUrl =
+    `${publicSupabaseUrl}/functions/v1/mark-viewed?type=contract&id=${encodeURIComponent(contractId)}`;
   const total = formatMoney(Number(contract.total));
   const start = formatDate(contract.start_date as string | null);
   const end = formatDate(contract.end_date as string | null);
@@ -79,6 +83,7 @@ function generateContractClientEmailHtml(
 </table>
 
 <div style="text-align:center;margin:30px 0">
+<a href="${acceptUrl}" style="display:inline-block;background:#10b981;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">Accept Contract</a>
 <a href="${pdfUrl}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">Download PDF</a>
 </div>
 </div>
@@ -86,6 +91,7 @@ function generateContractClientEmailHtml(
 <p style="margin:0 0 5px 0;font-size:12px">Service provided by</p>
 <p style="margin:0">© 2024 Thunder Pro Inc. | <a href="https://www.thunderpro.co" style="color:white">www.thunderpro.co</a></p>
 </div>
+<img src="${trackingPixelUrl}" width="1" height="1" style="display:none;" alt="" />
 </div>
 </body>
 </html>`;

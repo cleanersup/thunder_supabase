@@ -20,7 +20,7 @@ Sentry.init({
 });
 
 interface MarkViewedRequest {
-  type: 'estimate' | 'invoice';
+  type: "estimate" | "invoice" | "contract";
   id: string;
 }
 
@@ -36,52 +36,69 @@ serve(async (req) => {
     try {
       // Parse URL to get query parameters (for tracking pixel GET requests)
       const url = new URL(req.url);
-      const type = url.searchParams.get('type') as 'estimate' | 'invoice' | null;
-      const id = url.searchParams.get('id');
+      const type = url.searchParams.get("type") as "estimate" | "invoice" | "contract" | null;
+      const id = url.searchParams.get("id");
 
       console.log(`[mark-viewed] Function invoked. Type: ${type}, ID: ${id}`);
 
       if (!type || !id) {
-        console.error('[mark-viewed] Missing required parameters');
-        throw new Error('Missing required parameters: type and id');
+        console.error("[mark-viewed] Missing required parameters");
+        throw new Error("Missing required parameters: type and id");
+      }
+
+      if (type !== "estimate" && type !== "invoice" && type !== "contract") {
+        console.error("[mark-viewed] Invalid type:", type);
+        throw new Error("Invalid type: use estimate, invoice, or contract");
       }
 
       // Create Supabase client
-      const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-      const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
       const supabase = createClient(supabaseUrl, supabaseKey);
 
-      const tableName = type === 'estimate' ? 'estimates' : 'invoices';
+      const tableName = type === "estimate"
+        ? "estimates"
+        : type === "invoice"
+        ? "invoices"
+        : "contracts";
+
+      const selectColumns = type === "contract" ? "viewed_at, status" : "viewed_at";
 
       // Check if already viewed
       console.log(`[mark-viewed] Fetching record from ${tableName} for ID ${id}`);
       const { data: existing, error: fetchError } = await supabase
         .from(tableName)
-        .select('viewed_at')
-        .eq('id', id)
+        .select(selectColumns)
+        .eq("id", id)
         .single();
 
       if (fetchError) {
-        console.error('[mark-viewed] Error fetching record:', fetchError);
+        console.error("[mark-viewed] Error fetching record:", fetchError);
         throw new Error(`Failed to fetch ${type}`);
       }
 
       // Only update if not already viewed
       if (!existing.viewed_at) {
-        const updates: any = { viewed_at: new Date().toISOString() };
+        const updates: Record<string, string> = { viewed_at: new Date().toISOString() };
 
-        // If it's an estimate, also update status to 'Viewed'
-        if (type === 'estimate') {
-          updates.status = 'Viewed';
+        if (type === "estimate") {
+          updates.status = "Viewed";
+        }
+        if (type === "contract") {
+          const st = (existing as { status?: string }).status;
+          if (st === "Sent") {
+            updates.status = "Pending";
+          }
+          updates.updated_at = new Date().toISOString();
         }
 
         const { error: updateError } = await supabase
           .from(tableName)
           .update(updates)
-          .eq('id', id);
+          .eq("id", id);
 
         if (updateError) {
-          console.error('Error updating record:', updateError);
+          console.error("Error updating record:", updateError);
           throw new Error(`Failed to mark ${type} as viewed`);
         }
 

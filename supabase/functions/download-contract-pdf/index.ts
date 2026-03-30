@@ -310,6 +310,18 @@ serve(async (req: Request): Promise<Response> => {
             headers: { "Content-Type": "application/json", ...corsHeaders },
           });
         }
+
+        // Same as mark-viewed?type=contract: first open of PDF link sets viewed_at and Sent → Pending
+        const row = contractRow as { id: string; viewed_at?: string | null; status?: string | null };
+        if (!row.viewed_at) {
+          const now = new Date().toISOString();
+          const updates: Record<string, string> = { viewed_at: now, updated_at: now };
+          if (String(row.status || "") === "Sent") {
+            updates.status = "Pending";
+          }
+          await supabaseAdmin.from("contracts").update(updates).eq("id", row.id);
+        }
+
         const { data: profile } = await supabaseAdmin.from("profiles").select("*").eq("user_id", contractRow.user_id).maybeSingle();
         const pdfBytes = await generateContractPdfBytes(contractRow as Record<string, unknown>, profile || {});
         const num = String((contractRow as { contract_number?: string }).contract_number || "contract");

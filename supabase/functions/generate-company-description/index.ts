@@ -6,32 +6,67 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const TEMPLATE_WHO_WE_ARE = `{companyName} is a professional cleaning company specializing in commercial and residential cleaning services. Based in {address}, we are dedicated to providing reliable, efficient, and customized cleaning solutions to meet the specific needs of our clients. Our commitment is to create clean, safe, and healthy environments.
-At {companyName}, we understand the importance of a pristine space. Our experienced team utilizes advanced techniques and high-quality products to ensure thorough and consistent results. We pride ourselves on our attention to detail and our ability to deliver exceptional service that exceeds expectations.
-We are committed to fostering long-term relationships with our clients through trust and outstanding performance. {companyName} is your partner in maintaining a spotless and welcoming environment.`;
+const TEMPLATE_WHO_WE_ARE = `{companyName} is a professional cleaning company specializing in commercial cleaning and janitorial services.
 
-const TEMPLATE_WHY_CHOOSE_US = `When you partner with {companyName} in {address}, you are choosing a cleaning service dedicated to exceeding your expectations. Our foundation is built upon a team of highly trained and professional individuals committed to delivering impeccable results. We understand that your needs are unique, which is why we offer flexible scheduling options designed to fit seamlessly into your routine.
-At {companyName}, we prioritize your convenience and satisfaction. Our robust 24/7 customer support ensures that assistance is always available, whenever you need it. We stand behind our commitment to punctuality with an on-time arrival guarantee, so you can rest assured your cleaning will be managed efficiently and without delay. Furthermore, we are proud to offer competitive pricing, delivering exceptional value without compromising on quality.`;
+Since our beginnings in {address}, we have been dedicated to providing reliable, efficient, and customized cleaning solutions tailored to the specific needs of each corporate client.
 
-const TEMPLATE_OUR_SERVICES = `{companyName}, {address}, is dedicated to providing comprehensive solutions designed to enhance the appearance and hygiene of your commercial property. Our expert team offers thorough Services, ensuring your facilities are consistently maintained to the highest standards of cleanliness. This meticulous attention to detail not only creates a more pleasant environment for your employees and visitors but also contributes to a more productive workspace.
-We specialize in Commercial Services, addressing all aspects of your business's upkeep, from daily tidying to deep services projects. Additionally, our professional Pressure Washing Services are available to revitalize the exterior of your building, removing dirt, grime, and environmental build-up to restore its curb appeal and protect your investment. Partner with {companyName} to experience a level of cleanliness that elevates your business.`;
+Our commitment is to create clean, safe, and healthy environments, helping businesses and institutions maintain their professional image while meeting the highest standards of hygiene and presentation.`;
 
-const TEMPLATE_SERVICE_COVERAGE = `{companyName} is a professional organization specializing in providing comprehensive cleaning services. We are dedicated to delivering reliable, efficient, and customized cleaning solutions tailored to meet the diverse needs of our clients across various sectors. Our unwavering commitment is to foster clean, safe, and healthy environments for all our partners.
-At {companyName}, we understand the critical role a pristine environment plays in operational success and well-being. Our experienced team utilizes advanced techniques and eco-friendly practices to ensure the highest standards are met. We pride ourselves on our meticulous attention to detail and our ability to adapt to specific client requirements, ensuring satisfaction with every service rendered.`;
+const TEMPLATE_WHY_CHOOSE_US = `When you work with {companyName} in {address}, you can count on:
+
+Trained, uniformed, and verified cleaning professionals
+Constant supervision and quality control on every service
+Compliance with OSHA safety standards and use of eco-friendly products
+Flexible scheduling (morning, afternoon, or evening)
+Direct and efficient communication with our management team`;
+
+const TEMPLATE_OUR_SERVICES = `{companyName} has a well-trained team and professional equipment to handle a wide range of commercial spaces throughout {address}.
+
+Main Services:
+Commercial cleaning (offices, warehouses, schools, and corporate buildings)
+Janitorial services customized to each client's operation
+Pressure washing for exteriors, walls, sidewalks, and parking lots
+Deep cleaning of floors, windows, and high-traffic areas
+Professional disinfection using EPA-certified products
+Maintenance programs on a daily, weekly, or monthly basis`;
+
+const TEMPLATE_SERVICE_COVERAGE = `{companyName} proudly serves {address} and surrounding cities, offering ongoing cleaning solutions for businesses, institutions, construction companies, and nonprofit organizations that seek a reliable and professional cleaning partner.`;
 
 /** Static clause bodies — same legal style as commercial estimate terms; no AI. */
 const CLAUSE_TEMPLATES: Record<string, string> = {
-  cancellationPolicy: `If the Client chooses to cancel the scheduled service after the fifty percent (50%) deposit has been paid, the Client may do so without penalty to the contract. However, only twenty-five percent (25%) of the total service price will be refunded to the Client. The remaining twenty-five percent (25%) shall be retained by {companyName} to cover administrative, scheduling, and operational costs. All cancellations must be submitted in writing. Refunds will be processed within a reasonable timeframe using the original payment method. Cancellation notices may be sent to {companyEmail} or by certified mail to {address}.`,
+  cancellationPolicy: `If the Client chooses to cancel the scheduled service after the fifty percent (50%) deposit has been paid, the Client may do so without penalty to the contract. However, only twenty-five percent (25%) of the total service price will be refunded to the Client.
 
-  noRefundClause: `{companyName} maintains a strict no-refund policy. Under no circumstances will refunds be issued for dissatisfaction with the service or for any other reason, once the services have commenced or been completed as described in this Agreement. By signing this Agreement, the Client acknowledges and agrees to this no-refund policy and waives any right to dispute charges or request reimbursement for services rendered.`,
+The remaining twenty-five percent (25%) of the total service price shall be retained by {companyName} to cover administrative, scheduling, and operational costs incurred during the preparation and planning of the service.
 
-  nonCompeteClause: `The Client agrees that, for the duration of this Agreement and for a period of twelve (12) months following its termination or completion, they shall not: directly or indirectly solicit, hire, or attempt to hire any employee, contractor, or subcontractor of {companyName} who was involved in the performance of services under this Agreement; or engage with or contract any individual or third party using confidential or proprietary information obtained through this Agreement with the intention of replicating or continuing similar services without the involvement of {companyName}. Any violation of this clause shall be considered a material breach of the Agreement and may result in legal action, including but not limited to injunctive relief and monetary damages, as permitted by law.`,
+All cancellations must be submitted in writing. Refunds, when applicable, will be processed within a reasonable timeframe using the original payment method, unless otherwise agreed in writing.`,
 
-  antiHarassment: `The Client agrees to provide a safe, respectful, and harassment-free work environment for all employees and representatives of {companyName} throughout the duration of the services. Any form of harassment, discrimination, verbal abuse, intimidation, or inappropriate behavior by the Client or its staff toward {companyName} personnel shall be considered a serious breach of this Agreement and may result in the immediate suspension or termination of services, without refund or liability. {companyName} reserves the right to remove its staff from the job site at any time if working conditions are deemed unsafe, hostile, or inappropriate.`,
+  noRefundClause: `{companyName} maintains a strict no-refund policy. Under no circumstances will refunds be issued for dissatisfaction with the service or for any other reason, once the services have commenced or been completed as described in this Agreement.
 
-  liabilityInsurance: `{companyName} carries general liability insurance to cover its operations during the performance of the contracted services. The Client acknowledges that {companyName}'s liability for any claim arising out of this Agreement, whether in contract, tort, or otherwise, shall be limited to the total amount paid by the Client under this Agreement. {companyName} shall not be liable for any indirect, incidental, consequential, or punitive damages, including but not limited to loss of profits, business interruption, or loss of use. The Client agrees to indemnify, defend, and hold harmless {companyName}, its employees, agents, and subcontractors from and against any and all claims, damages, losses, or expenses arising out of or resulting from the Client's negligence or breach of this Agreement.`,
+By signing this Agreement, the Client acknowledges and agrees to this no-refund policy and waives any right to dispute charges or request reimbursement for services rendered.`,
 
-  confidentiality: `Both parties agree to maintain the confidentiality of any proprietary, sensitive, or confidential information disclosed during the term of this Agreement. Neither party shall disclose such information to any third party without the prior written consent of the other, except as required by law. This obligation shall survive the termination or expiration of this Agreement and remain in effect indefinitely.`,
+  nonCompeteClause: `The Client agrees that, for the duration of this Agreement and for a period of twelve (12) months following its termination or completion, they shall not:
+
+Directly or indirectly solicit, hire, or attempt to hire any employee, contractor, or subcontractor of {companyName} who was involved in the performance of services under this Agreement.
+
+Engage with or contract any individual or third party using confidential or proprietary information obtained through this Agreement with the intention of replicating or continuing similar services without the involvement of {companyName}.
+
+Any violation of this clause shall be considered a material breach of the Agreement and may result in legal action, including but not limited to injunctive relief and monetary damages, as permitted by law.`,
+
+  antiHarassment: `The Client agrees to provide a safe, respectful, and harassment-free work environment for all employees and representatives of {companyName} throughout the duration of the services.
+
+Any form of harassment, discrimination, verbal abuse, intimidation, or inappropriate behavior by the Client or its staff toward {companyName} personnel shall be considered a serious breach of this Agreement and may result in the immediate suspension or termination of services, without refund or liability.
+
+{companyName} reserves the right to remove its staff from the job site at any time if working conditions are deemed unsafe, hostile, or inappropriate.`,
+
+  liabilityInsurance: `{companyName} carries general liability insurance to cover its operations during the performance of the contracted services. The Client acknowledges that {companyName}'s liability for any claim arising out of this Agreement, whether in contract, tort, or otherwise, shall be limited to the total amount paid by the Client under this Agreement.
+
+{companyName} shall not be liable for any indirect, incidental, consequential, or punitive damages, including but not limited to loss of profits, business interruption, or loss of use.
+
+The Client agrees to indemnify, defend, and hold harmless {companyName}, its employees, agents, and subcontractors from and against any and all claims, damages, losses, or expenses arising out of or resulting from the Client's negligence or breach of this Agreement.`,
+
+  confidentiality: `Both parties agree to maintain the confidentiality of any proprietary, sensitive, or confidential information disclosed during the term of this Agreement. Neither party shall disclose such information to any third party without the prior written consent of the other, except as required by law.
+
+This obligation shall survive the termination or expiration of this Agreement and remain in effect indefinitely.`,
 };
 
 type ProfileRow = {
@@ -60,6 +95,21 @@ function interpolate(companyName: string, address: string, companyEmail: string,
     .replaceAll("{companyName}", name)
     .replaceAll("{address}", addr)
     .replaceAll("{companyEmail}", email);
+}
+
+/** Matches CreateContract.tsx modal payloads: `services` / `cities` string arrays. */
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === "string" ? item.trim() : String(item ?? "").trim()))
+    .filter((s) => s.length > 0);
+}
+
+/** After interpolated template: optional section title + bullet list (plain text for UI / PDF / DB). */
+function appendUserListSection(base: string, sectionTitle: string, items: string[]): string {
+  if (items.length === 0) return base;
+  const bullets = items.map((line) => `- ${line}`).join("\n");
+  return `${base}\n\n${sectionTitle}\n${bullets}`;
 }
 
 async function getProfileForTemplates(
@@ -132,7 +182,17 @@ serve(async (req) => {
       else if (type === "why_choose_us") template = TEMPLATE_WHY_CHOOSE_US;
       else template = TEMPLATE_WHO_WE_ARE;
 
-      const description = interpolate(companyName, address, companyEmail, template);
+      let description = interpolate(companyName, address, companyEmail, template);
+      if (type === "our_services") {
+        description = appendUserListSection(description, "Services", normalizeStringList(body.services));
+      } else if (type === "service_coverage") {
+        description = appendUserListSection(
+          description,
+          "Service Coverage Areas",
+          normalizeStringList(body.cities),
+        );
+      }
+
       return new Response(JSON.stringify({ description }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
