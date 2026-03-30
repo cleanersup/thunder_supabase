@@ -30,6 +30,19 @@ const normalizePhoneNumber = (phone: string): string => {
   return `+1${digits}`;
 };
 
+/** When SMS uses .../view-contract?token=..., derive .../download-contract-pdf?token=... for logs. */
+function tryInferPdfUrlFromContractUrl(contractUrl: string): string | null {
+  try {
+    const u = new URL(contractUrl);
+    const token = u.searchParams.get("token");
+    if (!token || !u.pathname.includes("view-contract")) return null;
+    const pdfPath = u.pathname.replace(/view-contract\/?$/, "download-contract-pdf");
+    return `${u.origin}${pdfPath}?token=${encodeURIComponent(token)}`;
+  } catch {
+    return null;
+  }
+}
+
 serve(async (req) => {
   return await Sentry.withScope(async () => {
     Sentry.setTag("function", "send-contract-sms");
@@ -43,10 +56,23 @@ serve(async (req) => {
 
     try {
       const body = await req.json();
+      console.log("[send-contract-sms] Request body:", JSON.stringify(body, null, 2));
+
       const { phoneNumber, clientName, contractUrl, contractTotal, isUpdate }: ContractSMSRequest = body;
 
       if (!phoneNumber || !clientName || !contractUrl) {
+        console.error("[send-contract-sms] Validation failed: missing phoneNumber, clientName, or contractUrl");
         throw new Error("Phone number, client name, and contract URL are required");
+      }
+
+      console.log("[send-contract-sms] URL embedded in SMS (client opens this link):", contractUrl);
+      const inferredPdfUrl = tryInferPdfUrlFromContractUrl(contractUrl);
+      if (inferredPdfUrl) {
+        console.log("[send-contract-sms] Inferred direct PDF URL (same token):", inferredPdfUrl);
+      } else if (contractUrl.includes("download-contract-pdf")) {
+        console.log("[send-contract-sms] contractUrl appears to be a direct PDF download link");
+      } else {
+        console.log("[send-contract-sms] No PDF URL inferred (expected if contractUrl is not view-contract?token=...)");
       }
 
       const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID");
@@ -54,10 +80,12 @@ serve(async (req) => {
       const twilioPhone = Deno.env.get("TWILIO_PHONE_NUMBER");
 
       if (!accountSid || !authToken || !twilioPhone) {
+        console.error("[send-contract-sms] Missing Twilio env: check TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER");
         throw new Error("Missing Twilio credentials");
       }
 
       const normalizedPhone = normalizePhoneNumber(phoneNumber);
+      console.log("[send-contract-sms] Recipient (normalized):", normalizedPhone, "| clientName:", clientName, "| isUpdate:", !!isUpdate);
 
       const totalText = contractTotal != null && !Number.isNaN(Number(contractTotal))
         ? ` ($${Number(contractTotal).toFixed(2)})`
@@ -68,7 +96,11 @@ serve(async (req) => {
         message = `Hi ${clientName}, your service agreement${totalText} has been updated. View and download here: ${contractUrl}`;
       }
 
+      console.log("[send-contract-sms] SMS body length:", message.length, "chars");
+      console.log("[send-contract-sms] SMS body preview:", message.substring(0, 120) + (message.length > 120 ? "…" : ""));
+
       const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
+      console.log("[send-contract-sms] Calling Twilio API…");
 
       const response = await fetch(twilioUrl, {
         method: "POST",
@@ -84,10 +116,15 @@ serve(async (req) => {
       });
 
       const data = await response.json();
+      console.log("[send-contract-sms] Twilio HTTP status:", response.status, response.statusText);
+      console.log("[send-contract-sms] Twilio response JSON:", JSON.stringify(data, null, 2));
 
       if (!response.ok) {
+        console.error("[send-contract-sms] Twilio error — SMS NOT sent");
         throw new Error(data.message || data.error_message || "Failed to send SMS");
       }
+
+      console.log("[send-contract-sms] SUCCESS — SMS sent | messageSid:", data.sid, "| status:", data.status ?? "n/a");
 
       return new Response(
         JSON.stringify({ success: true, messageSid: data.sid }),
@@ -99,7 +136,8 @@ serve(async (req) => {
     } catch (error: unknown) {
       Sentry.captureException(error);
       const msg = error instanceof Error ? error.message : "Internal server error";
-      console.error("Error in send-contract-sms:", error);
+      console.error("[send-contract-sms] FAILURE —", msg);
+      console.error("[send-contract-sms] Error detail:", error);
       return new Response(
         JSON.stringify({ error: msg }),
         {
