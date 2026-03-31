@@ -72,6 +72,9 @@ verify_jwt = true
 [functions.send-contract-sms]
 verify_jwt = false
 
+[functions.process-contract-expirations]
+verify_jwt = false
+
 [functions.view-contract]
 verify_jwt = false
 
