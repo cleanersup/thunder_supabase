@@ -43,6 +43,54 @@ function tryInferPdfUrlFromContractUrl(contractUrl: string): string | null {
   }
 }
 
+/**
+ * Twilio send with step logs matching send-contract-email’s `SMTP:` lines (visible in `supabase functions serve`).
+ */
+async function sendContractSmsViaTwilio(params: {
+  accountSid: string;
+  authToken: string;
+  twilioPhone: string;
+  to: string;
+  body: string;
+}): Promise<{ sid: string; status?: string }> {
+  const { accountSid, authToken, twilioPhone, to, body } = params;
+  const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
+
+  console.log("SMS: POST /2010-04-01/Accounts/{AccountSid}/Messages.json");
+  console.log("SMS: To:<" + to + ">");
+  console.log("SMS: From:<" + twilioPhone + ">");
+  console.log("SMS: Body length " + body.length + " chars");
+  console.log("SMS: Authorization Basic <redacted>");
+
+  const response = await fetch(twilioUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Authorization": "Basic " + btoa(`${accountSid}:${authToken}`),
+    },
+    body: new URLSearchParams({
+      To: to,
+      From: twilioPhone,
+      Body: body,
+    }),
+  });
+
+  const data = (await response.json()) as Record<string, unknown>;
+  console.log("SMS: HTTP " + response.status + " " + response.statusText);
+
+  if (!response.ok) {
+    console.log("SMS: ERROR " + JSON.stringify(data));
+    throw new Error(String(data.message || data.error_message || "Failed to send SMS"));
+  }
+
+  const sid = String(data.sid ?? "");
+  const st = data.status != null ? String(data.status) : "n/a";
+  console.log("SMS: MessageSid " + sid);
+  console.log("SMS: Status " + st);
+  console.log("SMS: done");
+  return { sid, status: st };
+}
+
 serve(async (req) => {
   return await Sentry.withScope(async () => {
     Sentry.setTag("function", "send-contract-sms");
@@ -51,28 +99,28 @@ serve(async (req) => {
       return new Response(null, { headers: corsHeaders });
     }
 
-    console.log("=== send-contract-sms FUNCTION TRIGGERED ===");
-    console.log("Timestamp:", new Date().toISOString());
+    console.log("=== Starting Contract SMS (Twilio) ===");
+    console.log("Current time:", new Date().toISOString());
 
     try {
       const body = await req.json();
-      console.log("[send-contract-sms] Request body:", JSON.stringify(body, null, 2));
+      console.log("SMS: Parse JSON body OK");
 
       const { phoneNumber, clientName, contractUrl, contractTotal, isUpdate }: ContractSMSRequest = body;
 
       if (!phoneNumber || !clientName || !contractUrl) {
-        console.error("[send-contract-sms] Validation failed: missing phoneNumber, clientName, or contractUrl");
+        console.error("SMS: Validation failed — need phoneNumber, clientName, contractUrl");
         throw new Error("Phone number, client name, and contract URL are required");
       }
 
-      console.log("[send-contract-sms] URL embedded in SMS (client opens this link):", contractUrl);
+      console.log("SMS: contractUrl " + contractUrl);
       const inferredPdfUrl = tryInferPdfUrlFromContractUrl(contractUrl);
       if (inferredPdfUrl) {
-        console.log("[send-contract-sms] Inferred direct PDF URL (same token):", inferredPdfUrl);
+        console.log("SMS: inferred PDF URL " + inferredPdfUrl);
       } else if (contractUrl.includes("download-contract-pdf")) {
-        console.log("[send-contract-sms] contractUrl appears to be a direct PDF download link");
+        console.log("SMS: contractUrl is direct PDF link");
       } else {
-        console.log("[send-contract-sms] No PDF URL inferred (expected if contractUrl is not view-contract?token=...)");
+        console.log("SMS: no inferred PDF (not view-contract?token=...)");
       }
 
       const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID");
@@ -80,12 +128,14 @@ serve(async (req) => {
       const twilioPhone = Deno.env.get("TWILIO_PHONE_NUMBER");
 
       if (!accountSid || !authToken || !twilioPhone) {
-        console.error("[send-contract-sms] Missing Twilio env: check TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER");
+        console.error("SMS: Missing TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER");
         throw new Error("Missing Twilio credentials");
       }
 
+      console.log("SMS: Twilio env present (AccountSid " + accountSid.slice(0, 6) + "…)");
+
       const normalizedPhone = normalizePhoneNumber(phoneNumber);
-      console.log("[send-contract-sms] Recipient (normalized):", normalizedPhone, "| clientName:", clientName, "| isUpdate:", !!isUpdate);
+      console.log("SMS: clientName " + clientName + " | isUpdate " + String(!!isUpdate));
 
       const totalText = contractTotal != null && !Number.isNaN(Number(contractTotal))
         ? ` ($${Number(contractTotal).toFixed(2)})`
@@ -96,38 +146,18 @@ serve(async (req) => {
         message = `Hi ${clientName}, your service agreement${totalText} has been updated. View and download here: ${contractUrl}`;
       }
 
-      console.log("[send-contract-sms] SMS body length:", message.length, "chars");
-      console.log("[send-contract-sms] SMS body preview:", message.substring(0, 120) + (message.length > 120 ? "…" : ""));
+      console.log("SMS: preview " + message.substring(0, 100) + (message.length > 100 ? "…" : ""));
 
-      const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
-      console.log("[send-contract-sms] Calling Twilio API…");
-
-      const response = await fetch(twilioUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "Authorization": "Basic " + btoa(`${accountSid}:${authToken}`),
-        },
-        body: new URLSearchParams({
-          To: normalizedPhone,
-          From: twilioPhone,
-          Body: message,
-        }),
+      const result = await sendContractSmsViaTwilio({
+        accountSid,
+        authToken,
+        twilioPhone,
+        to: normalizedPhone,
+        body: message,
       });
 
-      const data = await response.json();
-      console.log("[send-contract-sms] Twilio HTTP status:", response.status, response.statusText);
-      console.log("[send-contract-sms] Twilio response JSON:", JSON.stringify(data, null, 2));
-
-      if (!response.ok) {
-        console.error("[send-contract-sms] Twilio error — SMS NOT sent");
-        throw new Error(data.message || data.error_message || "Failed to send SMS");
-      }
-
-      console.log("[send-contract-sms] SUCCESS — SMS sent | messageSid:", data.sid, "| status:", data.status ?? "n/a");
-
       return new Response(
-        JSON.stringify({ success: true, messageSid: data.sid }),
+        JSON.stringify({ success: true, messageSid: result.sid }),
         {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
           status: 200,
@@ -136,8 +166,8 @@ serve(async (req) => {
     } catch (error: unknown) {
       Sentry.captureException(error);
       const msg = error instanceof Error ? error.message : "Internal server error";
-      console.error("[send-contract-sms] FAILURE —", msg);
-      console.error("[send-contract-sms] Error detail:", error);
+      console.error("SMS: FAILURE —", msg);
+      console.error("SMS:", error);
       return new Response(
         JSON.stringify({ error: msg }),
         {
