@@ -178,9 +178,11 @@ async function generateContractPdfBytes(contract: Record<string, unknown>, profi
 
   for (const b of aboutBlocks) addParagraphSection(b.title, b.body);
 
-  const sections = (contract.sections as Record<string, string>) || {};
+  const sections = (contract.sections as Record<string, unknown>) || {};
   const customTitles = (contract.custom_clause_titles as Record<string, string>) || {};
-  const entries = Object.entries(sections).filter(([, v]) => v?.trim());
+  const entries = Object.entries(sections).filter(
+    (e): e is [string, string] => typeof e[1] === "string" && e[1].trim().length > 0,
+  );
 
   if (entries.length > 0) {
     if (yPosition > pageHeight - 80) {
