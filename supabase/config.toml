@@ -9,6 +9,9 @@ site_url = "https://portal.thunderpro.co"
 # This prevents tokens from expiring too quickly
 otp_expiry = 86400
 
+[functions.stripe-webhook]
+verify_jwt = false
+
 [functions.revenuecat-webhook]
 verify_jwt = false
 
