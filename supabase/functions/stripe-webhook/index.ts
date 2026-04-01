@@ -48,7 +48,7 @@ serve(async (req: Request) => {
     // Verify webhook signature
     let event: Stripe.Event;
     try {
-      event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
+      event = await stripe.webhooks.constructEventAsync(body, signature, webhookSecret);
       console.log("Webhook verified:", event.type);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Internal server error";
