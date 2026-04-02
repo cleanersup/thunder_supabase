@@ -13,43 +13,57 @@ Sentry.init({
   tracesSampleRate: 0.1,
 });
 
+/** Titles for default clause keys (camelCase legacy + snake_case as stored in `contracts.sections` JSON array). */
 const SECTION_TITLES: Record<string, string> = {
   scopeOfWork: "Scope of Work",
+  scope_of_work: "Scope of Work",
   purposeOfAgreement: "Purpose of the Agreement",
+  purpose_of_agreement: "Purpose of the Agreement",
   priceAndPayment: "Price and Payment Terms",
+  price_and_payment: "Price and Payment Terms",
   cancellationPolicy: "Cancellation Policy",
+  cancellation_policy: "Cancellation Policy",
   noRefundClause: "No Refund Clause",
+  no_refund: "No Refund Clause",
   nonCompeteClause: "Non-Compete Clause",
+  non_compete: "Non-Compete Clause",
   antiHarassment: "Anti-Harassment and Respect Policy",
+  anti_harassment: "Anti-Harassment and Respect Policy",
   liabilityInsurance: "Liability and Insurance",
+  liability_insurance: "Liability and Insurance",
   confidentiality: "Confidentiality",
 };
+
+/** Preferred clause order when `sections` is a flat record (legacy). */
+const CLAUSE_ORDER_GROUPS: readonly (readonly string[])[] = [
+  ["scopeOfWork", "scope_of_work"],
+  ["purposeOfAgreement", "purpose_of_agreement"],
+  ["priceAndPayment", "price_and_payment"],
+  ["cancellationPolicy", "cancellation_policy"],
+  ["noRefundClause", "no_refund"],
+  ["nonCompeteClause", "non_compete"],
+  ["antiHarassment", "anti_harassment"],
+  ["liabilityInsurance", "liability_insurance"],
+  ["confidentiality"],
+];
 
 function formatCurrency(n: number): string {
   return (Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
-
-const SECTION_KEY_ORDER = [
-  "scopeOfWork",
-  "purposeOfAgreement",
-  "priceAndPayment",
-  "cancellationPolicy",
-  "noRefundClause",
-  "nonCompeteClause",
-  "antiHarassment",
-  "liabilityInsurance",
-  "confidentiality",
-] as const;
 
 const COLOR_BLACK: [number, number, number] = [0, 0, 0];
 const COLOR_BODY: [number, number, number] = [85, 85, 85];
 const COLOR_MUTED: [number, number, number] = [120, 120, 120];
 const COLOR_LINE: [number, number, number] = [224, 224, 224];
 
-async function fetchLogoDataUrl(logoUrl: string | null | undefined): Promise<string | null> {
-  if (!logoUrl || typeof logoUrl !== "string" || !logoUrl.startsWith("http")) return null;
+/** Dashboard often stores logos as `data:image/...;base64,...` on `profiles.company_logo`; Edge must accept those too. */
+async function resolveLogoDataUrl(logoUrl: string | null | undefined): Promise<string | null> {
+  if (!logoUrl || typeof logoUrl !== "string") return null;
+  const trimmed = logoUrl.trim();
+  if (trimmed.startsWith("data:image/")) return trimmed;
+  if (!trimmed.startsWith("http")) return null;
   try {
-    const res = await fetch(logoUrl);
+    const res = await fetch(trimmed);
     if (!res.ok) return null;
     const buf = new Uint8Array(await res.arrayBuffer());
     let binary = "";
@@ -61,6 +75,61 @@ async function fetchLogoDataUrl(logoUrl: string | null | undefined): Promise<str
   } catch {
     return null;
   }
+}
+
+type TermBlock = { title: string; body: string };
+
+/**
+ * Dashboard PDF uses `sections` as ContractClause[] (JSON array). This function was only handling Record<string,string>,
+ * so email/public PDFs had empty Terms & Conditions. Supports both shapes.
+ */
+function normalizeContractTerms(sectionsRaw: unknown, customTitles: Record<string, string>): TermBlock[] {
+  if (Array.isArray(sectionsRaw)) {
+    const rows: { order: number; title: string; body: string }[] = [];
+    for (let idx = 0; idx < sectionsRaw.length; idx++) {
+      const c = sectionsRaw[idx];
+      if (c === null || typeof c !== "object") continue;
+      const rec = c as Record<string, unknown>;
+      if (rec.enabled === false) continue;
+      const body = String(rec.body ?? "").trim();
+      if (!body) continue;
+      const key = String(rec.key ?? "");
+      const titleFromRow = String(rec.title ?? "").trim();
+      const title = titleFromRow || SECTION_TITLES[key] || customTitles[key] || key || "Clause";
+      const order = typeof rec.order === "number" && !Number.isNaN(rec.order) ? rec.order : idx;
+      rows.push({ order, title, body });
+    }
+    rows.sort((a, b) => a.order - b.order);
+    return rows.map(({ title, body }) => ({ title, body }));
+  }
+
+  if (sectionsRaw && typeof sectionsRaw === "object" && !Array.isArray(sectionsRaw)) {
+    const sections = sectionsRaw as Record<string, unknown>;
+    const rawEntries = Object.entries(sections).filter(
+      (e): e is [string, string] => typeof e[1] === "string" && e[1].trim().length > 0,
+    );
+    const used = new Set<string>();
+    const ordered: [string, string][] = [];
+    for (const group of CLAUSE_ORDER_GROUPS) {
+      for (const k of group) {
+        const found = rawEntries.find(([key]) => key === k);
+        if (found) {
+          ordered.push(found);
+          used.add(found[0]);
+          break;
+        }
+      }
+    }
+    for (const e of rawEntries) {
+      if (!used.has(e[0])) ordered.push(e);
+    }
+    return ordered.map(([key, body]) => ({
+      title: SECTION_TITLES[key] || customTitles[key] || key,
+      body: body.trim(),
+    }));
+  }
+
+  return [];
 }
 
 /** Reference layout: cover (centered), About + Terms (left-aligned, light grays), signatures, page numbers. */
@@ -75,7 +144,7 @@ async function generateContractPdfBytes(contract: Record<string, unknown>, profi
   const bottomLimit = pageHeight - footerReserve;
 
   const companyName = String(profile?.company_name || "Company Name");
-  const logoDataUrl = await fetchLogoDataUrl(profile?.company_logo as string | undefined);
+  const logoDataUrl = await resolveLogoDataUrl(profile?.company_logo as string | undefined);
 
   const formatDate = (d: string | null | undefined) => {
     if (!d) return "N/A";
@@ -238,22 +307,10 @@ async function generateContractPdfBytes(contract: Record<string, unknown>, profi
   for (const b of aboutBlocks) addAboutBlock(b.title, b.body);
 
   // ── Terms & Conditions (all clause sections + custom) ─────────────────────
-  const sections = (contract.sections as Record<string, unknown>) || {};
   const customTitles = (contract.custom_clause_titles as Record<string, string>) || {};
-  const rawEntries = Object.entries(sections).filter(
-    (e): e is [string, string] => typeof e[1] === "string" && e[1].trim().length > 0,
-  );
-  const orderSet = new Set<string>(SECTION_KEY_ORDER as unknown as string[]);
-  const ordered: [string, string][] = [];
-  for (const k of SECTION_KEY_ORDER) {
-    const found = rawEntries.find(([key]) => key === k);
-    if (found) ordered.push(found);
-  }
-  for (const e of rawEntries) {
-    if (!orderSet.has(e[0])) ordered.push(e);
-  }
+  const termBlocks = normalizeContractTerms(contract.sections, customTitles);
 
-  if (ordered.length > 0) {
+  if (termBlocks.length > 0) {
     const headerH = 28;
     y = ensureSpace(y, headerH);
     doc.setFontSize(14);
@@ -265,8 +322,7 @@ async function generateContractPdfBytes(contract: Record<string, unknown>, profi
     doc.line(margin, y, pageWidth - margin, y);
     y += 12;
 
-    for (const [key, value] of ordered) {
-      const title = SECTION_TITLES[key] || customTitles[key] || key;
+    for (const { title, body } of termBlocks) {
       doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(COLOR_BLACK[0], COLOR_BLACK[1], COLOR_BLACK[2]);
@@ -279,7 +335,7 @@ async function generateContractPdfBytes(contract: Record<string, unknown>, profi
       y += 3;
       doc.setFont("helvetica", "normal");
       doc.setTextColor(COLOR_BODY[0], COLOR_BODY[1], COLOR_BODY[2]);
-      const bodyLines = doc.splitTextToSize(value, contentWidth);
+      const bodyLines = doc.splitTextToSize(body, contentWidth);
       for (const line of bodyLines) {
         y = ensureSpace(y, 6);
         doc.text(line, margin, y);
