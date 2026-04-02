@@ -29,7 +29,41 @@ function formatCurrency(n: number): string {
   return (Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-/** PDF layout matches download-estimate-pdf generateEstimatePDF (commercial/residential estimate style). */
+const SECTION_KEY_ORDER = [
+  "scopeOfWork",
+  "purposeOfAgreement",
+  "priceAndPayment",
+  "cancellationPolicy",
+  "noRefundClause",
+  "nonCompeteClause",
+  "antiHarassment",
+  "liabilityInsurance",
+  "confidentiality",
+] as const;
+
+const COLOR_BLACK: [number, number, number] = [0, 0, 0];
+const COLOR_BODY: [number, number, number] = [85, 85, 85];
+const COLOR_MUTED: [number, number, number] = [120, 120, 120];
+const COLOR_LINE: [number, number, number] = [224, 224, 224];
+
+async function fetchLogoDataUrl(logoUrl: string | null | undefined): Promise<string | null> {
+  if (!logoUrl || typeof logoUrl !== "string" || !logoUrl.startsWith("http")) return null;
+  try {
+    const res = await fetch(logoUrl);
+    if (!res.ok) return null;
+    const buf = new Uint8Array(await res.arrayBuffer());
+    let binary = "";
+    for (let i = 0; i < buf.length; i++) binary += String.fromCharCode(buf[i]);
+    const b64 = btoa(binary);
+    const ct = res.headers.get("content-type") || "image/png";
+    if (!ct.startsWith("image/")) return null;
+    return `data:${ct};base64,${b64}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Reference layout: cover (centered), About + Terms (left-aligned, light grays), signatures, page numbers. */
 async function generateContractPdfBytes(contract: Record<string, unknown>, profile: Record<string, unknown>): Promise<Uint8Array> {
   const jsPDF = (await import("https://esm.sh/jspdf@2.5.1")).default;
   const doc = new jsPDF();
@@ -37,112 +71,141 @@ async function generateContractPdfBytes(contract: Record<string, unknown>, profi
   const pageHeight = doc.internal.pageSize.getHeight();
   const margin = 20;
   const contentWidth = pageWidth - margin * 2;
-  const darkBlue = [30, 58, 138] as const;
-  const lightGreen = [240, 253, 244] as const;
-  const darkGrey = [51, 51, 51] as const;
+  const footerReserve = 22;
+  const bottomLimit = pageHeight - footerReserve;
 
   const companyName = String(profile?.company_name || "Company Name");
+  const logoDataUrl = await fetchLogoDataUrl(profile?.company_logo as string | undefined);
+
   const formatDate = (d: string | null | undefined) => {
     if (!d) return "N/A";
     try {
-      return new Date(d).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+      return new Date(d + (d.length <= 10 ? "T12:00:00Z" : "")).toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        timeZone: "UTC",
+      });
     } catch {
       return String(d);
     }
   };
 
-  const drawHeader = () => {
-    let y = 0;
-    doc.setFillColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-    doc.rect(0, y, pageWidth, 25, "F");
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(18);
-    doc.setFont("helvetica", "bold");
-    doc.text(companyName, pageWidth / 2, y + 10, { align: "center" });
-    doc.setFontSize(11);
+  const drawPageFooter = (pageIndex: number) => {
+    const cx = pageWidth / 2;
+    doc.setTextColor(COLOR_MUTED[0], COLOR_MUTED[1], COLOR_MUTED[2]);
+    doc.setFontSize(8);
     doc.setFont("helvetica", "normal");
-    doc.text("Service Agreement", pageWidth / 2, y + 18, { align: "center" });
-    return 35;
+    doc.text(`Page ${pageIndex}`, cx, pageHeight - 10, { align: "center" });
+    doc.setTextColor(COLOR_BLACK[0], COLOR_BLACK[1], COLOR_BLACK[2]);
   };
 
-  const drawFooter = () => {
-    const footerY = pageHeight - 20;
-    doc.setFillColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-    doc.rect(0, footerY, pageWidth, 20, "F");
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(9);
-    doc.setFont("helvetica", "normal");
-    doc.text("Service provided by", pageWidth / 2, footerY + 6, { align: "center" });
-    doc.text("© 2024 Thunder Pro Inc. | www.thunderpro.co", pageWidth / 2, footerY + 14, { align: "center" });
+  let pageNumber = 1;
+
+  const newPage = () => {
+    drawPageFooter(pageNumber);
+    doc.addPage();
+    pageNumber++;
+    return margin;
   };
 
-  let yPosition = drawHeader();
-  yPosition += 10;
+  const ensureSpace = (y: number, needed: number): number => {
+    if (y + needed > bottomLimit) return newPage();
+    return y;
+  };
 
-  doc.setFontSize(12);
-  doc.setFont("helvetica", "bold");
-  doc.setTextColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-  doc.text("Client Information", margin, yPosition);
-  yPosition += 5;
-  doc.setDrawColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-  doc.setLineWidth(0.5);
-  doc.line(margin, yPosition, pageWidth - margin, yPosition);
-  yPosition += 8;
-
-  doc.setFontSize(10);
-  doc.setTextColor(darkGrey[0], darkGrey[1], darkGrey[2]);
-  const clientLines = [
-    ["Name:", String(contract.recipient_name || "")],
-    ["Email:", String(contract.recipient_email || "")],
-    ["Phone:", String(contract.recipient_phone || "")],
-    ["Address:", String(contract.recipient_address || "")],
-  ];
-  for (const [label, val] of clientLines) {
-    doc.setFont("helvetica", "bold");
-    doc.text(label, margin, yPosition);
-    doc.setFont("helvetica", "normal");
-    doc.text(val || "—", margin + 28, yPosition);
-    yPosition += 5;
+  // ── Page 1: Cover (centered) ───────────────────────────────────────────────
+  let y = 36;
+  if (logoDataUrl) {
+    try {
+      const w = 36;
+      const xLogo = (pageWidth - w) / 2;
+      const imgFmt = /image\/jpe?g/i.test(logoDataUrl) ? "JPEG" : "PNG";
+      doc.addImage(logoDataUrl, imgFmt, xLogo, y, w, w, undefined, "FAST");
+      y += w + 14;
+    } catch {
+      y += 4;
+    }
+  } else {
+    y += 8;
   }
-  yPosition += 8;
 
-  doc.setFontSize(12);
+  doc.setTextColor(COLOR_BLACK[0], COLOR_BLACK[1], COLOR_BLACK[2]);
+  doc.setFontSize(20);
   doc.setFont("helvetica", "bold");
-  doc.setTextColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-  doc.text("Contract Details", margin, yPosition);
-  yPosition += 5;
-  doc.line(margin, yPosition, pageWidth - margin, yPosition);
-  yPosition += 8;
+  doc.text(companyName, pageWidth / 2, y, { align: "center" });
+  y += 10;
+
+  doc.setDrawColor(COLOR_LINE[0], COLOR_LINE[1], COLOR_LINE[2]);
+  doc.setLineWidth(0.3);
+  doc.line(margin + 25, y, pageWidth - margin - 25, y);
+  y += 12;
+
+  doc.setFontSize(13);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(55, 55, 55);
+  doc.text("Service Agreement", pageWidth / 2, y, { align: "center" });
+  y += 10;
 
   doc.setFontSize(10);
   doc.setFont("helvetica", "normal");
-  doc.setTextColor(darkGrey[0], darkGrey[1], darkGrey[2]);
-  const startD = contract.start_date as string | null;
-  const endD = contract.end_date as string | null;
-  const period = startD && endD ? `${formatDate(startD)} — ${formatDate(endD)}` : "N/A";
-  const details = [
-    ["Contract #:", String(contract.contract_number || "")],
-    ["Period:", period],
-    ["Total:", `$${formatCurrency(Number(contract.total))}`],
-    ["Payment frequency:", String(contract.payment_frequency || "—")],
-  ];
-  for (const [label, val] of details) {
-    doc.setFont("helvetica", "bold");
-    doc.text(label, margin, yPosition);
-    doc.setFont("helvetica", "normal");
-    doc.text(val, margin + 40, yPosition);
-    yPosition += 5;
-  }
-  yPosition += 10;
+  doc.setTextColor(COLOR_MUTED[0], COLOR_MUTED[1], COLOR_MUTED[2]);
+  doc.text(`Contract #${String(contract.contract_number || "")}`, pageWidth / 2, y, { align: "center" });
+  y += 18;
 
-  doc.setFillColor(lightGreen[0], lightGreen[1], lightGreen[2]);
-  doc.rect(margin, yPosition - 4, contentWidth, 22, "F");
+  doc.setFontSize(9);
+  doc.text("Prepared for:", pageWidth / 2, y, { align: "center" });
+  y += 7;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(12);
-  doc.setTextColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-  doc.text("Contract Value", margin + 8, yPosition + 6);
-  doc.text(`$${formatCurrency(Number(contract.total))}`, pageWidth - margin - 8, yPosition + 6, { align: "right" });
-  yPosition += 28;
+  doc.setTextColor(COLOR_BLACK[0], COLOR_BLACK[1], COLOR_BLACK[2]);
+  doc.text(String(contract.recipient_name || ""), pageWidth / 2, y, { align: "center" });
+  y += 16;
+
+  const startD = contract.start_date as string | null;
+  const endD = contract.end_date as string | null;
+  const periodStr = startD && endD ? `${formatDate(startD)} — ${formatDate(endD)}` : "N/A";
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(COLOR_BODY[0], COLOR_BODY[1], COLOR_BODY[2]);
+  doc.text(`Period: ${periodStr}`, pageWidth / 2, y, { align: "center" });
+  y = pageHeight - 52;
+
+  const addr1 = [profile?.company_address, profile?.company_city, profile?.company_state, profile?.company_zip]
+    .filter(Boolean)
+    .join(", ");
+  doc.setFontSize(8);
+  doc.setTextColor(COLOR_MUTED[0], COLOR_MUTED[1], COLOR_MUTED[2]);
+  if (profile?.company_address) {
+    doc.text(String(profile.company_address), pageWidth / 2, y, { align: "center" });
+    y += 4;
+  }
+  if (addr1 && profile?.company_address !== addr1) {
+    doc.text(addr1, pageWidth / 2, y, { align: "center" });
+    y += 4;
+  }
+  if (profile?.company_phone) {
+    doc.text(String(profile.company_phone), pageWidth / 2, y, { align: "center" });
+    y += 4;
+  }
+  if (profile?.company_email) {
+    doc.text(String(profile.company_email), pageWidth / 2, y, { align: "center" });
+  }
+
+  drawPageFooter(pageNumber);
+  doc.addPage();
+  pageNumber++;
+  y = margin;
+
+  // ── About {Company} ────────────────────────────────────────────────────────
+  doc.setFontSize(16);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(COLOR_BLACK[0], COLOR_BLACK[1], COLOR_BLACK[2]);
+  doc.text(`About ${companyName}`, margin, y);
+  y += 7;
+  doc.setDrawColor(COLOR_LINE[0], COLOR_LINE[1], COLOR_LINE[2]);
+  doc.line(margin, y, pageWidth - margin, y);
+  y += 12;
 
   const aboutBlocks: { title: string; body: string }[] = [
     { title: "Who We Are", body: String(contract.who_we_are || "") },
@@ -151,118 +214,161 @@ async function generateContractPdfBytes(contract: Record<string, unknown>, profi
     { title: "Service Coverage", body: String(contract.service_coverage || "") },
   ];
 
-  const addParagraphSection = (title: string, body: string) => {
-    if (!body?.trim()) return;
-    doc.setFontSize(12);
+  const addAboutBlock = (title: string, body: string) => {
+    if (!body.trim()) return;
+    const lines = doc.splitTextToSize(body, contentWidth);
+    const blockH = 8 + 5 + lines.length * 5 + 10;
+    y = ensureSpace(y, blockH);
+    doc.setFontSize(11);
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-    doc.text(title, margin, yPosition);
-    yPosition += 5;
-    doc.line(margin, yPosition, pageWidth - margin, yPosition);
-    yPosition += 8;
+    doc.setTextColor(COLOR_BLACK[0], COLOR_BLACK[1], COLOR_BLACK[2]);
+    doc.text(title, margin, y);
+    y += 7;
     doc.setFontSize(10);
     doc.setFont("helvetica", "normal");
-    doc.setTextColor(darkGrey[0], darkGrey[1], darkGrey[2]);
-    const lines = doc.splitTextToSize(body, contentWidth);
+    doc.setTextColor(COLOR_BODY[0], COLOR_BODY[1], COLOR_BODY[2]);
     for (const line of lines) {
-      if (yPosition > pageHeight - 40) {
-        drawFooter();
-        doc.addPage();
-        yPosition = drawHeader() + 10;
-      }
-      doc.text(line, margin, yPosition);
-      yPosition += 5;
+      y = ensureSpace(y, 6);
+      doc.text(line, margin, y);
+      y += 5;
     }
-    yPosition += 8;
+    y += 8;
   };
 
-  for (const b of aboutBlocks) addParagraphSection(b.title, b.body);
+  for (const b of aboutBlocks) addAboutBlock(b.title, b.body);
 
+  // ── Terms & Conditions (all clause sections + custom) ─────────────────────
   const sections = (contract.sections as Record<string, unknown>) || {};
   const customTitles = (contract.custom_clause_titles as Record<string, string>) || {};
-  const entries = Object.entries(sections).filter(
+  const rawEntries = Object.entries(sections).filter(
     (e): e is [string, string] => typeof e[1] === "string" && e[1].trim().length > 0,
   );
+  const orderSet = new Set<string>(SECTION_KEY_ORDER as unknown as string[]);
+  const ordered: [string, string][] = [];
+  for (const k of SECTION_KEY_ORDER) {
+    const found = rawEntries.find(([key]) => key === k);
+    if (found) ordered.push(found);
+  }
+  for (const e of rawEntries) {
+    if (!orderSet.has(e[0])) ordered.push(e);
+  }
 
-  if (entries.length > 0) {
-    if (yPosition > pageHeight - 80) {
-      drawFooter();
-      doc.addPage();
-      yPosition = drawHeader() + 10;
-    }
-    doc.setFontSize(12);
+  if (ordered.length > 0) {
+    const headerH = 28;
+    y = ensureSpace(y, headerH);
+    doc.setFontSize(14);
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-    doc.text("Terms & Conditions", margin, yPosition);
-    yPosition += 5;
-    doc.line(margin, yPosition, pageWidth - margin, yPosition);
-    yPosition += 10;
+    doc.setTextColor(COLOR_BLACK[0], COLOR_BLACK[1], COLOR_BLACK[2]);
+    doc.text("Terms & Conditions", margin, y);
+    y += 8;
+    doc.setDrawColor(COLOR_LINE[0], COLOR_LINE[1], COLOR_LINE[2]);
+    doc.line(margin, y, pageWidth - margin, y);
+    y += 12;
 
-    for (const [key, value] of entries) {
+    for (const [key, value] of ordered) {
       const title = SECTION_TITLES[key] || customTitles[key] || key;
       doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
-      doc.setTextColor(darkGrey[0], darkGrey[1], darkGrey[2]);
+      doc.setTextColor(COLOR_BLACK[0], COLOR_BLACK[1], COLOR_BLACK[2]);
       const titleLines = doc.splitTextToSize(title, contentWidth);
       for (const tl of titleLines) {
-        if (yPosition > pageHeight - 40) {
-          drawFooter();
-          doc.addPage();
-          yPosition = drawHeader() + 10;
-        }
-        doc.text(tl, margin, yPosition);
-        yPosition += 5;
+        y = ensureSpace(y, 6);
+        doc.text(tl, margin, y);
+        y += 5;
       }
-      yPosition += 2;
+      y += 3;
       doc.setFont("helvetica", "normal");
+      doc.setTextColor(COLOR_BODY[0], COLOR_BODY[1], COLOR_BODY[2]);
       const bodyLines = doc.splitTextToSize(value, contentWidth);
       for (const line of bodyLines) {
-        if (yPosition > pageHeight - 40) {
-          drawFooter();
-          doc.addPage();
-          yPosition = drawHeader() + 10;
-        }
-        doc.text(line, margin, yPosition);
-        yPosition += 5;
+        y = ensureSpace(y, 6);
+        doc.text(line, margin, y);
+        y += 5;
       }
-      yPosition += 6;
+      y += 8;
     }
   }
 
-  if (yPosition > pageHeight - 50) {
-    drawFooter();
-    doc.addPage();
-    yPosition = drawHeader() + 10;
-  } else {
-    yPosition += 10;
+  // ── Contract summary (footer info: total & payment) ───────────────────────
+  const summaryLines = [
+    `Total: $${formatCurrency(Number(contract.total))}`,
+    `Payment frequency: ${String(contract.payment_frequency || "—")}`,
+  ];
+  for (const line of summaryLines) {
+    y = ensureSpace(y, 8);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(COLOR_BODY[0], COLOR_BODY[1], COLOR_BODY[2]);
+    doc.text(line, margin, y);
+    y += 7;
   }
+  y += 6;
 
-  doc.setFontSize(12);
+  // ── Signatures ─────────────────────────────────────────────────────────────
+  const sigIntro =
+    `By signing below, both parties acknowledge that they have read, understood, and agree to all terms and conditions outlined in this Service Agreement (Contract #${String(contract.contract_number || "")}).`;
+  const introLines = doc.splitTextToSize(sigIntro, contentWidth);
+  const sigBlockH = 12 + introLines.length * 5 + 8 + 14 + 28 + 6 + 28 + 6 + 28;
+  y = ensureSpace(y, sigBlockH);
+
+  doc.setFontSize(14);
   doc.setFont("helvetica", "bold");
-  doc.setTextColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-  doc.text("Signatures", margin, yPosition);
-  yPosition += 6;
-  doc.line(margin, yPosition, pageWidth - margin, yPosition);
-  yPosition += 12;
+  doc.setTextColor(COLOR_BLACK[0], COLOR_BLACK[1], COLOR_BLACK[2]);
+  doc.text("Signatures", margin, y);
+  y += 8;
+  doc.setDrawColor(COLOR_LINE[0], COLOR_LINE[1], COLOR_LINE[2]);
+  doc.line(margin, y, pageWidth - margin, y);
+  y += 10;
 
-  const colW = contentWidth / 2 - 8;
-  const x2 = margin + colW + 16;
   doc.setFontSize(9);
-  doc.setFont("helvetica", "bold");
-  doc.text(companyName, margin, yPosition);
-  doc.text("Client", x2, yPosition);
-  yPosition += 40;
-  doc.setDrawColor(160, 160, 160);
-  doc.line(margin, yPosition, margin + colW, yPosition);
-  doc.line(x2, yPosition, x2 + colW, yPosition);
-  yPosition += 5;
-  doc.setFontSize(8);
   doc.setFont("helvetica", "normal");
-  doc.setTextColor(130, 130, 130);
-  doc.text("Authorized Signature", margin, yPosition);
-  doc.text("Authorized Signature", x2, yPosition);
+  doc.setTextColor(COLOR_BODY[0], COLOR_BODY[1], COLOR_BODY[2]);
+  for (const il of introLines) {
+    doc.text(il, margin, y);
+    y += 5;
+  }
+  y += 10;
 
-  drawFooter();
+  const colGap = 14;
+  const colW = (contentWidth - colGap) / 2;
+  const xRight = margin + colW + colGap;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.setTextColor(COLOR_BLACK[0], COLOR_BLACK[1], COLOR_BLACK[2]);
+  const leftHead = doc.splitTextToSize(companyName, colW);
+  for (let i = 0; i < leftHead.length; i++) {
+    doc.text(leftHead[i]!, margin, y + i * 5);
+  }
+  doc.text("Client", xRight, y);
+  y += Math.max(leftHead.length * 5, 5) + 14;
+
+  const drawSigColumn = (x: number, w: number) => {
+    let yy = y;
+    doc.setDrawColor(180, 180, 180);
+    doc.line(x, yy, x + w, yy);
+    yy += 5;
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(COLOR_MUTED[0], COLOR_MUTED[1], COLOR_MUTED[2]);
+    doc.text("Authorized Signature", x, yy);
+    yy += 22;
+    doc.line(x, yy, x + w, yy);
+    yy += 5;
+    doc.text("Printed Name", x, yy);
+    yy += 22;
+    doc.line(x, yy, x + w, yy);
+    yy += 5;
+    doc.text("Date", x, yy);
+    return yy + 4;
+  };
+
+  const yAfterLeft = drawSigColumn(margin, colW);
+  doc.setTextColor(COLOR_BLACK[0], COLOR_BLACK[1], COLOR_BLACK[2]);
+  const yAfterRight = drawSigColumn(xRight, colW);
+  y = Math.max(yAfterLeft, yAfterRight);
+
+  drawPageFooter(pageNumber);
 
   const pdfOutput = doc.output("arraybuffer");
   return new Uint8Array(pdfOutput);
