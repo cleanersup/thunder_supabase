@@ -142,17 +142,32 @@ async function generateContractPdfBytes(contract: Record<string, unknown>, profi
   const companyName = String(profile?.company_name || "Company Name");
   const logoDataUrl = await resolveLogoDataUrl(profile?.company_logo as string | undefined);
 
+  /** Calendar date from DB: avoid UTC midnight shift (same idea as dashboard `formatDateOnly` / parseDateOnly). */
   const formatDate = (d: string | null | undefined) => {
     if (!d) return "N/A";
+    const s = String(d).trim();
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+    if (m) {
+      const year = Number(m[1]);
+      const month = Number(m[2]);
+      const day = Number(m[3]);
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        const MONTHS = [
+          "January", "February", "March", "April", "May", "June",
+          "July", "August", "September", "October", "November", "December",
+        ];
+        return `${MONTHS[month - 1]} ${day}, ${year}`;
+      }
+    }
     try {
-      return new Date(d + (d.length <= 10 ? "T12:00:00Z" : "")).toLocaleDateString("en-US", {
+      return new Date(s).toLocaleDateString("en-US", {
         year: "numeric",
         month: "long",
         day: "numeric",
         timeZone: "UTC",
       });
     } catch {
-      return String(d);
+      return s;
     }
   };
 
