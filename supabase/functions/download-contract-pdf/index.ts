@@ -47,10 +47,6 @@ const CLAUSE_ORDER_GROUPS: readonly (readonly string[])[] = [
   ["confidentiality"],
 ];
 
-function formatCurrency(n: number): string {
-  return (Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
 const COLOR_BLACK: [number, number, number] = [0, 0, 0];
 const COLOR_BODY: [number, number, number] = [85, 85, 85];
 const COLOR_MUTED: [number, number, number] = [120, 120, 120];
@@ -344,21 +340,6 @@ async function generateContractPdfBytes(contract: Record<string, unknown>, profi
       y += 8;
     }
   }
-
-  // ── Contract summary (footer info: total & payment) ───────────────────────
-  const summaryLines = [
-    `Total: $${formatCurrency(Number(contract.total))}`,
-    `Payment frequency: ${String(contract.payment_frequency || "—")}`,
-  ];
-  for (const line of summaryLines) {
-    y = ensureSpace(y, 8);
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(COLOR_BODY[0], COLOR_BODY[1], COLOR_BODY[2]);
-    doc.text(line, margin, y);
-    y += 7;
-  }
-  y += 6;
 
   // ── Signatures ─────────────────────────────────────────────────────────────
   const sigIntro =
