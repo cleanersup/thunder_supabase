@@ -47,6 +47,47 @@ FROM auth.users u
 LEFT JOIN profiles p ON u.id = p.user_id
 WHERE u.email LIKE '%thunderproinc@gmail.com%';
 
+#Users with RevenueCat customer id — email, name, company_name, phone (missing/blank → NA). Phone = profiles.phone_number; use p.company_phone instead if you want the business line.
+SELECT
+  COALESCE(NULLIF(trim(COALESCE(u.email::text, '')), ''), 'NA') AS email,
+  COALESCE(NULLIF(trim(concat_ws(' ', p.first_name, p.last_name)), ''), 'NA') AS name,
+  COALESCE(NULLIF(trim(COALESCE(p.company_name::text, '')), ''), 'NA') AS company_name,
+  COALESCE(NULLIF(trim(COALESCE(p.phone_number::text, '')), ''), 'NA') AS phone_number
+FROM auth.users u
+INNER JOIN profiles p ON u.id = p.user_id
+WHERE p.revenue_cat_customer_id IS NOT NULL
+  AND btrim(p.revenue_cat_customer_id) <> ''
+ORDER BY u.email;
+
+#Export to CSV (Supabase blocks server `COPY ... TO '/path'` — use \copy or COPY TO STDOUT)
+#
+#In psql (postgres=>): \copy writes from the client — one line:
+#\copy (SELECT COALESCE(NULLIF(trim(COALESCE(u.email::text, '')), ''), 'NA') AS email, COALESCE(NULLIF(trim(concat_ws(' ', p.first_name, p.last_name)), ''), 'NA') AS name, COALESCE(NULLIF(trim(COALESCE(p.company_name::text, '')), ''), 'NA') AS company_name, COALESCE(NULLIF(trim(COALESCE(p.phone_number::text, '')), ''), 'NA') AS phone_number FROM auth.users u INNER JOIN profiles p ON u.id = p.user_id WHERE p.revenue_cat_customer_id IS NOT NULL AND btrim(p.revenue_cat_customer_id) <> '' ORDER BY u.email) TO '/tmp/revenuecat_emails.csv' WITH CSV HEADER
+#
+#From SSH on the host: file at /tmp inside the DB container, then docker cp to host:
+docker exec -i supabase_db_euydrdzayvjahstvmwoj psql -U postgres -d postgres <<'EOF'
+\copy (
+SELECT
+  COALESCE(NULLIF(trim(COALESCE(u.email::text, '')), ''), 'NA') AS email,
+  COALESCE(NULLIF(trim(concat_ws(' ', p.first_name, p.last_name)), ''), 'NA') AS name,
+  COALESCE(NULLIF(trim(COALESCE(p.company_name::text, '')), ''), 'NA') AS company_name,
+  COALESCE(NULLIF(trim(COALESCE(p.phone_number::text, '')), ''), 'NA') AS phone_number
+FROM auth.users u
+INNER JOIN profiles p ON u.id = p.user_id
+WHERE p.revenue_cat_customer_id IS NOT NULL
+  AND btrim(p.revenue_cat_customer_id) <> ''
+ORDER BY u.email
+) TO '/tmp/revenuecat_emails.csv' WITH CSV HEADER
+EOF
+
+docker cp supabase_db_euydrdzayvjahstvmwoj:/tmp/revenuecat_emails.csv ~/revenuecat_emails.csv
+
+#From your Mac (replace YOUR_SERVER_HOST):
+#scp admin@YOUR_SERVER_HOST:~/revenuecat_emails.csv /Users/carloszavala/Desktop/revenuecat_emails.csv
+
+#Stream CSV to Desktop in one shot (COPY TO STDOUT):
+#ssh admin@YOUR_SERVER_HOST "docker exec supabase_db_euydrdzayvjahstvmwoj psql -U postgres -d postgres -c \"COPY ( SELECT COALESCE(NULLIF(trim(COALESCE(u.email::text, '')), ''), 'NA') AS email, COALESCE(NULLIF(trim(concat_ws(' ', p.first_name, p.last_name)), ''), 'NA') AS name, COALESCE(NULLIF(trim(COALESCE(p.company_name::text, '')), ''), 'NA') AS company_name, COALESCE(NULLIF(trim(COALESCE(p.phone_number::text, '')), ''), 'NA') AS phone_number FROM auth.users u INNER JOIN profiles p ON u.id = p.user_id WHERE p.revenue_cat_customer_id IS NOT NULL AND btrim(p.revenue_cat_customer_id) <> '' ORDER BY u.email ) TO STDOUT WITH CSV HEADER\"" > /Users/carloszavala/Desktop/revenuecat_emails.csv
+
 
 #UPDATE USER PASSWORD
 UPDATE auth.users
