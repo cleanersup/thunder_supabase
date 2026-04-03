@@ -26,6 +26,72 @@ function formatDate(d: string | null | undefined): string {
   }
 }
 
+/** Owner notification copy: same layout but without Accept Contract button and without tracking pixel. */
+function generateContractOwnerEmailHtml(
+  contract: Record<string, unknown>,
+  companyName: string,
+  publicSupabaseUrl: string,
+): string {
+  const token = contract.public_share_token || contract.id;
+  const pdfUrl = `${publicSupabaseUrl}/functions/v1/download-contract-pdf?token=${token}`;
+  const total = formatMoney(Number(contract.total));
+  const start = formatDate(contract.start_date as string | null);
+  const end = formatDate(contract.end_date as string | null);
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:20px;font-family:Arial,sans-serif">
+<div style="max-width:600px;margin:0 auto">
+<div style="text-align:center;padding:15px;background:#1e3a8a;color:white">
+<h1 style="margin:0;font-size:22px">${escapeHtml(companyName)}</h1>
+<p style="margin:5px 0">Service Agreement — Owner Copy</p>
+</div>
+<div style="padding:15px">
+<p style="color:#6b7280;font-size:14px">A contract has been sent to your client. This is your copy for reference.</p>
+<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Client Information</h3>
+<div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div>
+<p><strong>Name:</strong> ${escapeHtml(String(contract.recipient_name || ""))}<br>
+<strong>Email:</strong> ${escapeHtml(String(contract.recipient_email || ""))}<br>
+<strong>Phone:</strong> ${escapeHtml(String(contract.recipient_phone || ""))}<br>
+<strong>Address:</strong> ${escapeHtml(String(contract.recipient_address || ""))}</p>
+
+<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Contract Details</h3>
+<div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div>
+<p><strong>Contract #:</strong> ${escapeHtml(String(contract.contract_number || ""))}<br>
+<strong>Period:</strong> ${escapeHtml(start)} — ${escapeHtml(end)}<br>
+<strong>Payment frequency:</strong> ${escapeHtml(String(contract.payment_frequency || "—"))}</p>
+
+<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Contract Value</h3>
+<table cellpadding="0" cellspacing="0" style="width:100%;background-color:#f0fdf4">
+  <tr>
+    <td style="padding:16px">
+      <table cellpadding="0" cellspacing="0" style="width:100%">
+        <tr>
+          <td style="padding:12px 0 0 0;text-align:left;font-weight:bold;font-size:20px;color:#1e3a8a;border-top:1px solid #d1d5db">Total:</td>
+          <td style="padding:12px 0 0 0;text-align:right;font-weight:bold;font-size:20px;color:#1e3a8a;border-top:1px solid #d1d5db">$${total}</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+
+<div style="text-align:center;margin:30px 0">
+<a href="${pdfUrl}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">Download PDF</a>
+</div>
+</div>
+<div style="text-align:center;padding:15px;background:#1e3a8a;color:white">
+<p style="margin:0 0 5px 0;font-size:12px">Service provided by</p>
+<p style="margin:0">© 2024 Thunder Pro Inc. | <a href="https://www.thunderpro.co" style="color:white">www.thunderpro.co</a></p>
+</div>
+</div>
+</body>
+</html>`;
+}
+
 /** Same layout as send-estimate-email client template (header, sections, Accept + Download PDF, tracking pixel, footer). */
 function generateContractClientEmailHtml(
   contract: Record<string, unknown>,
@@ -239,12 +305,18 @@ serve(async (req: Request): Promise<Response> => {
       const companyName = profile?.company_name || "Company Name";
       const publicSupabaseUrl = Deno.env.get("PUBLIC_APP_URL") || Deno.env.get("APP_URL") || "https://staging.thunderpro.co";
 
-      const html = generateContractClientEmailHtml(contract as Record<string, unknown>, companyName, publicSupabaseUrl);
       const subject = `Service Agreement - ${companyName}`;
-
       const ownerEmail = profile?.company_email || null;
-      const bcc = ownerEmail && ownerEmail !== recipientEmail ? ownerEmail : null;
-      await sendEmailViaSMTP(recipientEmail, bcc, subject, html);
+
+      // Client email — includes Accept Contract + Download PDF buttons
+      const clientHtml = generateContractClientEmailHtml(contract as Record<string, unknown>, companyName, publicSupabaseUrl);
+      await sendEmailViaSMTP(recipientEmail, null, subject, clientHtml);
+
+      // Owner email — includes only Download PDF (no Accept Contract button)
+      if (ownerEmail && ownerEmail !== recipientEmail) {
+        const ownerHtml = generateContractOwnerEmailHtml(contract as Record<string, unknown>, companyName, publicSupabaseUrl);
+        await sendEmailViaSMTP(ownerEmail, null, subject, ownerHtml);
+      }
 
       return new Response(JSON.stringify({ success: true, message: "Email sent" }), {
         status: 200,
