@@ -1,3 +1,4 @@
+import { encode as encodeBase64 } from "https://deno.land/std@0.190.0/encoding/base64.ts";
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.76.1";
 import * as Sentry from "npm:@sentry/deno";
@@ -52,19 +53,28 @@ const COLOR_BODY: [number, number, number] = [85, 85, 85];
 const COLOR_MUTED: [number, number, number] = [120, 120, 120];
 const COLOR_LINE: [number, number, number] = [224, 224, 224];
 
+/**
+ * Large logos (common as profile data URLs) make jsPDF addImage exceed edge worker CPU limits.
+ * ~280k chars ≈ large base64 payload; PDF still renders without the logo.
+ */
+const MAX_LOGO_DATA_URL_CHARS = 280_000;
+const MAX_LOGO_FETCH_BYTES = 400_000;
+
 /** Dashboard often stores logos as `data:image/...;base64,...` on `profiles.company_logo`; Edge must accept those too. */
 async function resolveLogoDataUrl(logoUrl: string | null | undefined): Promise<string | null> {
   if (!logoUrl || typeof logoUrl !== "string") return null;
   const trimmed = logoUrl.trim();
-  if (trimmed.startsWith("data:image/")) return trimmed;
+  if (trimmed.startsWith("data:image/")) {
+    if (trimmed.length > MAX_LOGO_DATA_URL_CHARS) return null;
+    return trimmed;
+  }
   if (!trimmed.startsWith("http")) return null;
   try {
     const res = await fetch(trimmed);
     if (!res.ok) return null;
     const buf = new Uint8Array(await res.arrayBuffer());
-    let binary = "";
-    for (let i = 0; i < buf.length; i++) binary += String.fromCharCode(buf[i]);
-    const b64 = btoa(binary);
+    if (buf.length > MAX_LOGO_FETCH_BYTES) return null;
+    const b64 = encodeBase64(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
     const ct = res.headers.get("content-type") || "image/png";
     if (!ct.startsWith("image/")) return null;
     return `data:${ct};base64,${b64}`;
