@@ -436,11 +436,30 @@ serve(async (req) => {
         .single();
 
       if (!fullErr && fullContract) {
+        const fc = fullContract as Record<string, unknown>;
         try {
-          await sendContractAcceptedNotifications(supabase, fullContract as Record<string, unknown>);
+          await sendContractAcceptedNotifications(supabase, fc);
         } catch (emailErr) {
           console.error("accept-contract email:", emailErr);
           Sentry.captureException(emailErr);
+        }
+
+        try {
+          const contractNumber = String(fc.contract_number || contractId);
+          const clientName = String(fc.recipient_name || "Client");
+          await supabase.from("notifications").insert({
+            user_id: fc.user_id as string,
+            type: "contract_accepted",
+            title: "Contract Accepted",
+            message: `Contract ${contractNumber} for ${clientName} was accepted`,
+            related_id: contractId,
+            related_type: "contract",
+            read: false,
+          });
+          console.log("accept-contract: notification inserted for user:", fc.user_id);
+        } catch (notifErr) {
+          console.error("accept-contract: failed to insert notification:", notifErr);
+          Sentry.captureException(notifErr);
         }
       }
 
