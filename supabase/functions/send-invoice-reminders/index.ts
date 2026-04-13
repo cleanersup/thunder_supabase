@@ -303,7 +303,8 @@ serve(async (req) => {
           console.log('SUPABASE_URL from env:', supabaseUrlEnv || 'NOT SET');
 
           const publicAppUrl = publicAppUrlEnv || appUrlEnv || 'https://app.staging.thunderpro.co';
-          const paymentLink = `${publicAppUrl}/invoice/payment/${invoice.id}`;
+          // Use payment_token (opaque) instead of raw UUID to prevent URL enumeration
+          const paymentLink = `${publicAppUrl}/invoice/payment/${invoice.payment_token || invoice.id}`;
 
           // Public URL for tracking pixel — must be reachable by email clients (Outlook, Gmail) when user opens email
           const publicSupabaseUrl = publicAppUrlEnv || appUrlEnv || 'https://staging.thunderpro.co';

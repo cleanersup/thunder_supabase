@@ -253,7 +253,8 @@ serve(async (req) => {
       console.log('SUPABASE_URL from env:', supabaseUrlEnv || 'NOT SET');
 
       const publicAppUrl = publicAppUrlEnv || appUrlEnv || 'https://app.staging.thunderpro.co';
-      const paymentLink = `${publicAppUrl}/invoice/payment/${invoiceId}`;
+      // Use payment_token (opaque) instead of raw UUID to prevent URL enumeration
+      const paymentLink = `${publicAppUrl}/invoice/payment/${invoice.payment_token || invoiceId}`;
 
       // Public Supabase URL for Edge Functions (download PDF, tracking pixel, etc.)
       // Must be publicly accessible — SUPABASE_URL may be internal (e.g. kong:8000).
