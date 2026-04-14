@@ -74,7 +74,7 @@ serve(async (req: Request) => {
 
         // Retrieve the full session with line items
         const fullSession = await stripe.checkout.sessions.retrieve(session.id, {
-          expand: ["line_items", "payment_intent"],
+          expand: ["line_items", "payment_intent", "payment_intent.payment_method"],
           stripeAccount: connectedAccountId || undefined,
         });
 
@@ -197,6 +197,79 @@ serve(async (req: Request) => {
               console.error("Error in notification/activity logic:", notifyErr);
             }
           }
+        }
+
+        // Persist saved card on CRM client (never block paid flow)
+        try {
+          if (
+            session.metadata?.save_payment_method === "true" &&
+            invoiceId &&
+            connectedAccountId &&
+            paymentIntent?.id
+          ) {
+            const customerId =
+              typeof fullSession.customer === "string"
+                ? fullSession.customer
+                : (fullSession.customer as Stripe.Customer | null)?.id ?? null;
+
+            const pmField = paymentIntent.payment_method;
+            let pmId: string | null =
+              typeof pmField === "string" ? pmField : (pmField as Stripe.PaymentMethod | null)?.id ?? null;
+
+            let pmObj: Stripe.PaymentMethod | null =
+              pmField && typeof pmField !== "string" ? (pmField as Stripe.PaymentMethod) : null;
+            if (pmId && !pmObj) {
+              pmObj = await stripe.paymentMethods.retrieve(pmId, {
+                stripeAccount: connectedAccountId,
+              });
+            }
+
+            if (customerId && pmId && pmObj?.type === "card" && pmObj.card) {
+              const { data: invRow, error: invFetchErr } = await supabase
+                .from("invoices")
+                .select("user_id, email")
+                .eq("id", invoiceId)
+                .single();
+
+              if (invFetchErr || !invRow?.user_id || !invRow.email) {
+                console.warn("Vault skip: could not load invoice for client match", invFetchErr);
+              } else {
+                const emailTrim = (invRow.email as string).trim();
+                const { data: clientMatch, error: clientFindErr } = await supabase
+                  .from("clients")
+                  .select("id")
+                  .eq("user_id", invRow.user_id)
+                  .eq("email", emailTrim)
+                  .limit(1)
+                  .maybeSingle();
+
+                if (clientFindErr || !clientMatch?.id) {
+                  console.warn("Vault skip: no clients row for email", emailTrim, clientFindErr);
+                } else {
+                  const { error: clientUpdErr } = await supabase
+                    .from("clients")
+                    .update({
+                      stripe_customer_id: customerId,
+                      stripe_default_payment_method_id: pmId,
+                      card_brand: pmObj.card.brand ?? null,
+                      card_last4: pmObj.card.last4 ?? null,
+                      card_exp_month: pmObj.card.exp_month ?? null,
+                      card_exp_year: pmObj.card.exp_year ?? null,
+                      updated_at: new Date().toISOString(),
+                    })
+                    .eq("id", clientMatch.id);
+
+                  if (clientUpdErr) {
+                    console.error("Vault: client row update error", clientUpdErr);
+                  } else {
+                    console.log("Vault: client payment method persisted for", emailTrim);
+                  }
+                }
+              }
+            }
+          }
+        } catch (vaultErr) {
+          console.error("Vault persistence error (non-fatal):", vaultErr);
         }
 
         break;

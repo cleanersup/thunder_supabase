@@ -26,6 +26,8 @@ interface CreateCheckoutRequest {
   metadata?: Record<string, string>;
   applicationFeeAmount?: number; // Platform fee in cents (default: 0)
   connectedAccountId?: string; // Optional: for public invoice payments
+  /** When true, attaches PM to Customer for off-session reuse (default false = unchanged behavior). */
+  savePaymentMethod?: boolean;
 }
 
 serve(async (req) => {
@@ -134,6 +136,8 @@ serve(async (req) => {
         quantity: item.quantity,
       }));
 
+    const savePaymentMethod = body.savePaymentMethod === true;
+
     // Create checkout session on connected account
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
       mode: "payment",
@@ -143,6 +147,7 @@ serve(async (req) => {
       metadata: {
         ...(userId && { merchant_user_id: userId }),
         ...body.metadata,
+        ...(savePaymentMethod ? { save_payment_method: "true" } : {}),
       },
       payment_intent_data: {
         // This is where application fees are set
@@ -150,12 +155,26 @@ serve(async (req) => {
         metadata: {
           ...(userId && { merchant_user_id: userId }),
           ...body.metadata,
+          ...(savePaymentMethod ? { save_payment_method: "true" } : {}),
         },
+        ...(savePaymentMethod ? { setup_future_usage: "off_session" } : {}),
       },
     };
 
-    // Add customer if provided
-    if (body.customerId) {
+    // Customer / email: when savePaymentMethod, require Customer for setup_future_usage
+    if (savePaymentMethod) {
+      if (body.customerId) {
+        sessionParams.customer = body.customerId;
+      } else {
+        if (!body.customerEmail) {
+          throw new Error(
+            "customerEmail or customerId is required when savePaymentMethod is true",
+          );
+        }
+        sessionParams.customer_email = body.customerEmail;
+        sessionParams.customer_creation = "always";
+      }
+    } else if (body.customerId) {
       sessionParams.customer = body.customerId;
     } else if (body.customerEmail) {
       sessionParams.customer_email = body.customerEmail;

@@ -12,6 +12,9 @@ otp_expiry = 86400
 [functions.stripe-webhook]
 verify_jwt = false
 
+[functions.stripe-charge-saved-invoice]
+verify_jwt = true
+
 [functions.revenuecat-webhook]
 verify_jwt = false
 
@@ -107,6 +110,9 @@ verify_jwt = false
 
 [functions.send-verification-email]
 verify_jwt = false
+
+[functions.send-signup-welcome]
+verify_jwt = true
 
 [functions.send-invoice-sms]
 verify_jwt = false
