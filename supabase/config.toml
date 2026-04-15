@@ -155,3 +155,6 @@ verify_jwt = false
 
 [functions.client-wallet-issue-token]
 verify_jwt = true
+
+[functions.public-invoice-payment-profile]
+verify_jwt = false

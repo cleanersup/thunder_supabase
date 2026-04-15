@@ -43,6 +43,7 @@ This document describes how **optional “save card for later”** on invoice Ch
 | `client-wallet-issue-token` | Merchant JWT → insert `client_wallet_tokens`, return public wallet URL. |
 | `client-wallet-get` | Public POST `{ token }` → company + client + masked card list. |
 | `client-wallet-setup-checkout` | Public POST `{ token }` → Checkout **setup** session URL. |
+| `public-invoice-payment-profile` | Public POST `{ invoiceId }` → merchant branding + Stripe flags (anon cannot read `profiles` under RLS). |
 
 `stripe-charge-saved-invoice` is configured with **`verify_jwt = true`** in `supabase/config.toml`. `stripe-webhook` uses **`verify_jwt = false`** and relies on the **Stripe signing secret**.
 
@@ -141,5 +142,6 @@ Some test cards force **authentication required** on off-session charges. If the
 - Migration: `supabase/migrations/20260415180000_client_wallet_tokens.sql`
 - Checkout: `supabase/functions/stripe-create-checkout/index.ts`
 - Webhook: `supabase/functions/stripe-webhook/index.ts`
+- Public pay profile (anon): `supabase/functions/public-invoice-payment-profile/index.ts`
 - Charge: `supabase/functions/stripe-charge-saved-invoice/index.ts`
 - Config: `supabase/config.toml` (`stripe-webhook`, `stripe-charge-saved-invoice`)
