@@ -137,6 +137,8 @@ serve(async (req) => {
       }));
 
     const savePaymentMethod = body.savePaymentMethod === true;
+    /** Public invoice pay (email/SMS link → /invoice/payment/:id → Checkout). */
+    const isInvoiceCheckout = Boolean(body.metadata?.invoice_id);
 
     // Create checkout session on connected account
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
@@ -147,7 +149,7 @@ serve(async (req) => {
       metadata: {
         ...(userId && { merchant_user_id: userId }),
         ...body.metadata,
-        ...(savePaymentMethod ? { save_payment_method: "true" } : {}),
+        ...(!isInvoiceCheckout && savePaymentMethod ? { save_payment_method: "true" } : {}),
       },
       payment_intent_data: {
         // This is where application fees are set
@@ -155,14 +157,36 @@ serve(async (req) => {
         metadata: {
           ...(userId && { merchant_user_id: userId }),
           ...body.metadata,
-          ...(savePaymentMethod ? { save_payment_method: "true" } : {}),
+          ...(!isInvoiceCheckout && savePaymentMethod ? { save_payment_method: "true" } : {}),
         },
-        ...(savePaymentMethod ? { setup_future_usage: "off_session" } : {}),
+        ...(!isInvoiceCheckout && savePaymentMethod
+          ? { setup_future_usage: "off_session" }
+          : {}),
       },
     };
 
-    // Customer / email: when savePaymentMethod, require Customer for setup_future_usage
-    if (savePaymentMethod) {
+    // Invoice payments: Stripe-hosted "save payment method" checkbox (consent on Checkout).
+    // See https://docs.stripe.com/payments/checkout/save-during-payment
+    if (isInvoiceCheckout) {
+      sessionParams.saved_payment_method_options = {
+        payment_method_save: "enabled",
+      };
+    }
+
+    // Customer / email: invoice Checkout requires a Customer object for payment_method_save.
+    if (isInvoiceCheckout) {
+      if (body.customerId) {
+        sessionParams.customer = body.customerId;
+      } else {
+        if (!body.customerEmail) {
+          throw new Error(
+            "customerEmail or customerId is required for invoice payment checkout",
+          );
+        }
+        sessionParams.customer_email = body.customerEmail;
+        sessionParams.customer_creation = "always";
+      }
+    } else if (savePaymentMethod) {
       if (body.customerId) {
         sessionParams.customer = body.customerId;
       } else {

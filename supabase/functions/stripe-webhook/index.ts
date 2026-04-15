@@ -289,14 +289,11 @@ serve(async (req: Request) => {
           }
         }
 
-        // Persist saved card on CRM client (never block paid flow)
+        // Persist saved card on CRM client (never block paid flow).
+        // Invoice flow: user opts in on Stripe Checkout → PM allow_redisplay === "always".
+        // Legacy: session.metadata.save_payment_method === "true" (setup_future_usage path).
         try {
-          if (
-            session.metadata?.save_payment_method === "true" &&
-            invoiceId &&
-            connectedAccountId &&
-            paymentIntent?.id
-          ) {
+          if (invoiceId && connectedAccountId && paymentIntent?.id) {
             const customerId =
               typeof fullSession.customer === "string"
                 ? fullSession.customer
@@ -314,7 +311,11 @@ serve(async (req: Request) => {
               });
             }
 
-            if (customerId && pmId && pmObj?.type === "card" && pmObj.card) {
+            const optedSaveOnCheckout = pmObj?.allow_redisplay === "always";
+            const legacySaveFlag = session.metadata?.save_payment_method === "true";
+            const shouldVault = optedSaveOnCheckout || legacySaveFlag;
+
+            if (customerId && pmId && pmObj?.type === "card" && pmObj.card && shouldVault) {
               const { data: invRow, error: invFetchErr } = await supabase
                 .from("invoices")
                 .select("user_id, email")
