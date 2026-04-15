@@ -42,8 +42,9 @@ serve(async (req) => {
     if (!stripeSecretKey) {
       throw new Error("STRIPE_SECRET_KEY not configured");
     }
+    // Stable Acacia+ (not .preview) — https://docs.stripe.com/api/versioning
     const stripe = new Stripe(stripeSecretKey, {
-      apiVersion: "2023-10-16",
+      apiVersion: "2024-11-20.acacia",
       httpClient: Stripe.createFetchHttpClient(),
     });
 

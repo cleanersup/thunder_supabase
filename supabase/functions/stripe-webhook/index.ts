@@ -27,8 +27,10 @@ serve(async (req: Request) => {
       throw new Error("Stripe configuration missing");
     }
 
+    // Pin a stable Acacia-era version so PaymentMethod.allow_redisplay is populated (Checkout save-card vault).
+    // Prefer stable dated versions over .preview in production — see https://docs.stripe.com/api/versioning
     const stripe = new Stripe(stripeSecretKey, {
-      apiVersion: "2023-10-16",
+      apiVersion: "2024-11-20.acacia",
       httpClient: Stripe.createFetchHttpClient(),
     });
 
@@ -68,7 +70,15 @@ serve(async (req: Request) => {
         const session = event.data.object as Stripe.Checkout.Session;
         console.log("Checkout session completed:", session.id);
 
-        const connectedAccountId = event.account; // This is the connected account ID
+        const connectedAccountId = event.account; // Connect: acct_…; required for direct charges on connected account
+
+        if (!connectedAccountId && session.mode === "payment") {
+          console.warn(
+            "[Vault] checkout.session.completed missing event.account (Connect). " +
+              "Register this webhook in Stripe Connect → Webhooks to receive connected-account events, " +
+              "or events will not resolve payment methods on the right account.",
+          );
+        }
 
         // ── Client wallet: Setup Checkout (add/update card on CRM client) ─────
         if (
@@ -311,11 +321,33 @@ serve(async (req: Request) => {
               });
             }
 
-            const optedSaveOnCheckout = pmObj?.allow_redisplay === "always";
+            const allowRedisplay = pmObj?.allow_redisplay ?? null;
+            const optedSaveOnCheckout = allowRedisplay === "always";
             const legacySaveFlag = session.metadata?.save_payment_method === "true";
             const shouldVault = optedSaveOnCheckout || legacySaveFlag;
 
-            if (customerId && pmId && pmObj?.type === "card" && pmObj.card && shouldVault) {
+            console.log("[Vault] invoice payment method snapshot", {
+              invoiceId,
+              connectedAccountId: connectedAccountId ?? null,
+              customerId,
+              pmId,
+              pmType: pmObj?.type ?? null,
+              allow_redisplay: allowRedisplay,
+              legacySaveFlag,
+              shouldVault,
+            });
+
+            if (!customerId || !pmId || !pmObj?.card) {
+              console.warn("[Vault] skip: missing customer, payment method, or card details");
+            } else if (pmObj.type !== "card") {
+              console.warn("[Vault] skip: only card payment methods are vaulted (got type:", pmObj.type, ")");
+            } else if (!shouldVault) {
+              console.warn(
+                "[Vault] skip: customer did not opt to save on Checkout (allow_redisplay is not 'always'; got:",
+                allowRedisplay,
+                "). If you expect 'always', confirm Stripe API version on this function is Acacia+.",
+              );
+            } else if (customerId && pmId && pmObj?.type === "card" && pmObj.card && shouldVault) {
               const { data: invRow, error: invFetchErr } = await supabase
                 .from("invoices")
                 .select("user_id, email")
@@ -326,16 +358,18 @@ serve(async (req: Request) => {
                 console.warn("Vault skip: could not load invoice for client match", invFetchErr);
               } else {
                 const emailTrim = (invRow.email as string).trim();
-                const { data: clientMatch, error: clientFindErr } = await supabase
-                  .from("clients")
-                  .select("id")
-                  .eq("user_id", invRow.user_id)
-                  .eq("email", emailTrim)
-                  .limit(1)
-                  .maybeSingle();
+                const { data: vaultClientId, error: rpcErr } = await supabase.rpc(
+                  "get_client_id_for_invoice_vault",
+                  { p_user_id: invRow.user_id, p_email: emailTrim },
+                );
 
-                if (clientFindErr || !clientMatch?.id) {
-                  console.warn("Vault skip: no clients row for email", emailTrim, clientFindErr);
+                if (rpcErr) {
+                  console.error("[Vault] RPC get_client_id_for_invoice_vault error:", rpcErr);
+                } else if (!vaultClientId) {
+                  console.warn(
+                    "[Vault] skip: no CRM client row with same email as invoice (case-insensitive). Invoice email:",
+                    emailTrim,
+                  );
                 } else {
                   const { error: clientUpdErr } = await supabase
                     .from("clients")
@@ -348,7 +382,7 @@ serve(async (req: Request) => {
                       card_exp_year: pmObj.card.exp_year ?? null,
                       updated_at: new Date().toISOString(),
                     })
-                    .eq("id", clientMatch.id);
+                    .eq("id", vaultClientId);
 
                   if (clientUpdErr) {
                     console.error("Vault: client row update error", clientUpdErr);
@@ -358,6 +392,10 @@ serve(async (req: Request) => {
                 }
               }
             }
+          } else if (invoiceId && !connectedAccountId) {
+            console.warn(
+              "[Vault] skip: invoice_id present but event.account is missing — Connect direct charges require a connected-account webhook.",
+            );
           }
         } catch (vaultErr) {
           console.error("Vault persistence error (non-fatal):", vaultErr);
