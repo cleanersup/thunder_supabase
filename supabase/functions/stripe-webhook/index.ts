@@ -68,9 +68,99 @@ serve(async (req: Request) => {
         const session = event.data.object as Stripe.Checkout.Session;
         console.log("Checkout session completed:", session.id);
 
+        const connectedAccountId = event.account; // This is the connected account ID
+
+        // ── Client wallet: Setup Checkout (add/update card on CRM client) ─────
+        if (
+          session.mode === "setup" &&
+          session.metadata?.client_wallet_setup === "true" &&
+          connectedAccountId
+        ) {
+          try {
+            const clientId = session.metadata?.client_id;
+            if (!clientId) {
+              console.warn("Wallet setup: missing client_id in metadata");
+              break;
+            }
+
+            const fullSetupSession = await stripe.checkout.sessions.retrieve(session.id, {
+              expand: ["setup_intent", "setup_intent.payment_method"],
+            }, { stripeAccount: connectedAccountId });
+
+            const siRaw = fullSetupSession.setup_intent;
+            const setupIntentId =
+              typeof siRaw === "string" ? siRaw : (siRaw as Stripe.SetupIntent | null)?.id;
+            if (!setupIntentId) {
+              console.warn("Wallet setup: no setup_intent on session");
+              break;
+            }
+
+            const si = await stripe.setupIntents.retrieve(setupIntentId, {
+              expand: ["payment_method"],
+            }, { stripeAccount: connectedAccountId });
+
+            const pmField = si.payment_method;
+            let pmId: string | null =
+              typeof pmField === "string" ? pmField : (pmField as Stripe.PaymentMethod | null)?.id ?? null;
+            const custField = si.customer;
+            const customerId: string | null =
+              typeof custField === "string"
+                ? custField
+                : (custField as Stripe.Customer | null)?.id ?? null;
+
+            let pmObj: Stripe.PaymentMethod | null =
+              pmField && typeof pmField !== "string" ? (pmField as Stripe.PaymentMethod) : null;
+            if (pmId && !pmObj) {
+              pmObj = await stripe.paymentMethods.retrieve(pmId, {
+                stripeAccount: connectedAccountId,
+              });
+            }
+
+            if (customerId && pmId && pmObj?.type === "card" && pmObj.card) {
+              await stripe.customers.update(
+                customerId,
+                { invoice_settings: { default_payment_method: pmId } },
+                { stripeAccount: connectedAccountId },
+              );
+
+              const { error: walletUpdErr } = await supabase
+                .from("clients")
+                .update({
+                  stripe_customer_id: customerId,
+                  stripe_default_payment_method_id: pmId,
+                  card_brand: pmObj.card.brand ?? null,
+                  card_last4: pmObj.card.last4 ?? null,
+                  card_exp_month: pmObj.card.exp_month ?? null,
+                  card_exp_year: pmObj.card.exp_year ?? null,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", clientId);
+
+              if (walletUpdErr) {
+                console.error("Wallet setup: client update error", walletUpdErr);
+              } else {
+                console.log("Wallet setup: saved payment method for client", clientId);
+              }
+            } else {
+              console.warn("Wallet setup: missing customer/pm or not a card", {
+                customerId,
+                pmId,
+                type: pmObj?.type,
+              });
+            }
+          } catch (walletErr) {
+            console.error("Wallet setup handler error:", walletErr);
+          }
+          break;
+        }
+
+        if (session.mode !== "payment") {
+          console.log("checkout.session.completed: non-payment mode ignored:", session.mode);
+          break;
+        }
+
         // Extract merchant user ID from metadata
         const merchantUserId = session.metadata?.merchant_user_id;
-        const connectedAccountId = event.account; // This is the connected account ID
 
         // Retrieve the full session with line items
         const fullSession = await stripe.checkout.sessions.retrieve(session.id, {

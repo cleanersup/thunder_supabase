@@ -198,6 +198,23 @@ WHERE user_id = (
     WHERE email = 'info@cleanersup.com'
 );
 
+#DELETE USER (irreversible — run SELECT first to confirm the row)
+#Each line below must be run as a full SQL statement (starts with SELECT or DELETE). Do not paste only the WHERE clause.
+#Deletes public profile row, then removes the auth account (login + auth.* cascades on hosted Supabase).
+#If DELETE FROM auth.users fails with a FK error, remove or fix the referencing row in the table named in the error, then retry.
+
+#Preview user before delete
+SELECT u.id, u.email, u.created_at
+FROM auth.users u
+WHERE u.email = 'info@cleanersup.com';
+
+DELETE FROM public.profiles p
+USING auth.users u
+WHERE p.user_id = u.id AND u.email = 'info@cleanersup.com';
+
+DELETE FROM auth.users
+WHERE email = 'info@cleanersup.com';
+
 #FIND USER WITH BY REVENUECAT ID:
 SELECT 
     u.id as user_id,

@@ -146,3 +146,12 @@ verify_jwt = false
 
 [functions.handle-email-bounce]
 verify_jwt = false
+
+[functions.client-wallet-get]
+verify_jwt = false
+
+[functions.client-wallet-setup-checkout]
+verify_jwt = false
+
+[functions.client-wallet-issue-token]
+verify_jwt = true

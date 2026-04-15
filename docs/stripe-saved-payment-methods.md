@@ -23,7 +23,10 @@ This document describes how **optional “save card for later”** on invoice Ch
 
    If there is **no** matching `clients` row, nothing is stored in Postgres (the Customer still exists in Stripe on the connected account).
 
-4. **Charge later (`stripe-charge-saved-invoice`)**  
+4. **Client wallet (public link + Setup Checkout)**  
+   Merchants issue an opaque token (`client-wallet-issue-token` → row in `client_wallet_tokens`). The client opens **`/client/wallet/:token`** on the dashboard (no login). They can run **`client-wallet-setup-checkout`**, which creates Stripe Checkout **`mode: setup`** on the merchant’s connected account. On `checkout.session.completed` with `metadata.client_wallet_setup`, **`stripe-webhook`** updates the same **`clients`** vault columns as invoice save-card.
+
+5. **Charge later (`stripe-charge-saved-invoice`)**  
    An authenticated **merchant** calls this function with `{ "invoiceId": "<uuid>" }`. It:
    - Ensures the invoice is **Pending**, belongs to the caller, and amount is valid.
    - Loads the same `clients` row by `user_id` + invoice `email` and requires `stripe_customer_id` + `stripe_default_payment_method_id`.
@@ -37,6 +40,9 @@ This document describes how **optional “save card for later”** on invoice Ch
 | `stripe-create-checkout` | Optional `savePaymentMethod`; sets Checkout session + PI for save-on-pay when true. |
 | `stripe-webhook` | `checkout.session.completed` → paid invoice + optional client vault update. |
 | `stripe-charge-saved-invoice` | Merchant JWT → charge pending invoice with saved PM. |
+| `client-wallet-issue-token` | Merchant JWT → insert `client_wallet_tokens`, return public wallet URL. |
+| `client-wallet-get` | Public POST `{ token }` → company + client + masked card list. |
+| `client-wallet-setup-checkout` | Public POST `{ token }` → Checkout **setup** session URL. |
 
 `stripe-charge-saved-invoice` is configured with **`verify_jwt = true`** in `supabase/config.toml`. `stripe-webhook` uses **`verify_jwt = false`** and relies on the **Stripe signing secret**.
 
@@ -132,6 +138,7 @@ Some test cards force **authentication required** on off-session charges. If the
 ## Related files
 
 - Migration: `supabase/migrations/20260413120000_add_clients_stripe_payment_columns.sql`
+- Migration: `supabase/migrations/20260415180000_client_wallet_tokens.sql`
 - Checkout: `supabase/functions/stripe-create-checkout/index.ts`
 - Webhook: `supabase/functions/stripe-webhook/index.ts`
 - Charge: `supabase/functions/stripe-charge-saved-invoice/index.ts`
