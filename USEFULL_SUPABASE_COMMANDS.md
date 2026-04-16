@@ -275,3 +275,27 @@ iPhone 17 Pro Max (simulator) (00360C5F-8C56-4CC9-836E-4E73D52BDA64)
 # 5) Local dev: Stripe cannot reach localhost without CLI:
 #    stripe listen --forward-to http://127.0.0.1:54321/functions/v1/stripe-webhook
 #    Put CLI whsec into supabase/functions/.env STRIPE_WEBHOOK_SECRET, restart supabase functions serve.
+
+# --- Stripe webhook: zero deliveries / no Docker logs (self-hosted staging.thunderpro.co) ---
+#
+# A) Prove traffic reaches the edge function (bypasses Stripe):
+#    curl -sS "https://staging.thunderpro.co/functions/v1/stripe-webhook"
+#    Expect JSON: {"ok":true,"fn":"stripe-webhook"}  AND docker logs show: [stripe-webhook] GET health check
+#    If curl fails or no log line → Kong/nginx/DNS in front of Supabase, not Stripe.
+#
+# B) Prove POST reaches the function (signature will fail — OK for this test):
+#    curl -sS -i -X POST "https://staging.thunderpro.co/functions/v1/stripe-webhook" \
+#      -H "Content-Type: application/json" -d '{}'
+#    Expect HTTP 400 and Docker logs: [stripe-webhook] ← POST … then signature FAILED or Missing stripe-signature
+#    If HTTP 401 before any [stripe-webhook] line → Kong JWT: ensure config.toml has
+#       [functions.stripe-webhook] verify_jwt = false
+#    then redeploy/reload edge functions so the gateway applies it (see GitHub supabase discussions re 401 + verify_jwt).
+#
+# C) Stripe Dashboard: Workbench can show "Total: 0" deliveries. Also add CLASSIC endpoint:
+#    https://dashboard.stripe.com/test/webhooks → Add endpoint → same URL
+#    → Listen to: Events on connected accounts → event checkout.session.completed
+#    → copy THAT signing secret into STRIPE_WEBHOOK_SECRET (Workbench vs classic = different whsec).
+#
+# D) On the destination, click "Show" next to "Listening to: 1 event" — must be exactly checkout.session.completed.
+#
+# E) whsec_ must be copied again after you "Roll" the secret in Stripe; update Supabase secrets and restart edge if needed.

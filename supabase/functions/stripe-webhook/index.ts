@@ -19,6 +19,15 @@ serve(async (req: Request) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  // Uptime / routing check (Stripe only POSTs; this proves Kong reaches the function).
+  if (req.method === "GET") {
+    console.log("[stripe-webhook] GET health check");
+    return new Response(JSON.stringify({ ok: true, fn: "stripe-webhook" }), {
+      status: 200,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
   console.log("[stripe-webhook] ←", req.method, "at", new Date().toISOString());
 
   try {
