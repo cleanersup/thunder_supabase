@@ -206,18 +206,38 @@ serve(async (req: Request) => {
           stripeAccount: connectedAccountId || undefined,
         });
 
-        // Get payment intent details
-        const paymentIntent = fullSession.payment_intent as Stripe.PaymentIntent;
+        // payment_intent may be an expanded object or only a string id — never assume .id exists.
+        const piRaw = fullSession.payment_intent;
+        const paymentIntentId =
+          typeof piRaw === "string"
+            ? piRaw
+            : (piRaw as Stripe.PaymentIntent | null)?.id ?? null;
+
+        let paymentIntent: Stripe.PaymentIntent | null =
+          piRaw && typeof piRaw !== "string" ? (piRaw as Stripe.PaymentIntent) : null;
+
+        if (paymentIntentId && (!paymentIntent?.id || typeof piRaw === "string")) {
+          try {
+            paymentIntent = await stripe.paymentIntents.retrieve(
+              paymentIntentId,
+              { expand: ["payment_method"] },
+              { stripeAccount: connectedAccountId || undefined },
+            );
+          } catch (piErr) {
+            console.error("[stripe-webhook] paymentIntents.retrieve failed:", piErr);
+            paymentIntent = null;
+          }
+        }
 
         console.log("[stripe-webhook] expanded session", {
-          payment_intent_id: paymentIntent?.id ?? null,
+          payment_intent_id: paymentIntent?.id ?? paymentIntentId,
           amount_total: fullSession.amount_total,
         });
 
         // Log the successful payment
         const paymentData = {
           session_id: session.id,
-          payment_intent_id: paymentIntent?.id,
+          payment_intent_id: paymentIntent?.id ?? paymentIntentId,
           connected_account_id: connectedAccountId,
           merchant_user_id: merchantUserId,
           customer_email: session.customer_details?.email,
@@ -243,7 +263,7 @@ serve(async (req: Request) => {
           amount: session.amount_total! / 100, // Convert cents to major currency
           currency: session.currency || "usd",
           status: session.payment_status === "paid" ? "succeeded" : "failed",
-          stripe_payment_intent_id: paymentIntent?.id,
+          stripe_payment_intent_id: paymentIntent?.id ?? paymentIntentId ?? null,
           stripe_session_id: session.id,
           payment_method: session.payment_method_types?.[0],
           metadata: session.metadata,
@@ -262,7 +282,7 @@ serve(async (req: Request) => {
             .update({
               status: "Paid",
               paid_at: new Date().toISOString(),
-              stripe_payment_intent_id: paymentIntent?.id,
+              stripe_payment_intent_id: paymentIntent?.id ?? paymentIntentId ?? null,
               stripe_session_id: session.id,
               payment_method: session.payment_method_types?.[0] || 'stripe',
             })
@@ -315,10 +335,6 @@ serve(async (req: Request) => {
                 invoice_number: invoice.invoice_number || '',
                 client_name: invoice.client_name || '',
                 amount: invoice.total || 0,
-                metadata: {
-                  source: 'stripe',
-                  session_id: session.id
-                }
               });
 
               if (activityError) {
@@ -336,6 +352,9 @@ serve(async (req: Request) => {
         // Invoice flow: user opts in on Stripe Checkout → PM allow_redisplay === "always".
         // Legacy: session.metadata.save_payment_method === "true" (setup_future_usage path).
         try {
+          const emailLooksValid = (e: string) =>
+            e.length > 0 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+
           if (invoiceId && connectedAccountId && paymentIntent?.id) {
             const customerId =
               typeof fullSession.customer === "string"
@@ -355,30 +374,47 @@ serve(async (req: Request) => {
             }
 
             const allowRedisplay = pmObj?.allow_redisplay ?? null;
-            const optedSaveOnCheckout = allowRedisplay === "always";
+            /** Stripe Checkout “Save card” maps to allow_redisplay === "always" on the PM (Acacia+). */
+            const saveCardCheckedCheckout = allowRedisplay === "always";
             const legacySaveFlag = session.metadata?.save_payment_method === "true";
-            const shouldVault = optedSaveOnCheckout || legacySaveFlag;
+            const shouldVault = saveCardCheckedCheckout || legacySaveFlag;
+
+            const sessionPayerEmail = session.customer_details?.email?.trim() ?? null;
 
             console.log("[Vault] invoice payment method snapshot", {
-              invoiceId,
-              connectedAccountId: connectedAccountId ?? null,
-              customerId,
-              pmId,
-              pmType: pmObj?.type ?? null,
-              allow_redisplay: allowRedisplay,
-              legacySaveFlag,
-              shouldVault,
+              invoice_id: invoiceId,
+              connected_account_id: connectedAccountId ?? null,
+              stripe_customer_on_session: customerId,
+              payment_intent_id: paymentIntent.id,
+              payment_method_id: pmId,
+              payment_method_type: pmObj?.type ?? null,
+              /** true = payer checked save on Stripe-hosted Checkout */
+              save_card_checked_on_checkout: saveCardCheckedCheckout,
+              payment_method_allow_redisplay: allowRedisplay,
+              save_card_metadata_legacy: legacySaveFlag,
+              will_attempt_vault_if_crm_match: shouldVault,
+              session_payer_email: sessionPayerEmail,
+              session_payer_email_present: Boolean(sessionPayerEmail),
+              session_payer_email_looks_valid: sessionPayerEmail ? emailLooksValid(sessionPayerEmail) : false,
             });
 
             if (!customerId || !pmId || !pmObj?.card) {
-              console.warn("[Vault] skip: missing customer, payment method, or card details");
+              console.warn("[Vault] skip: missing customer, payment method, or card details", {
+                has_stripe_customer_id: Boolean(customerId),
+                has_payment_method_id: Boolean(pmId),
+                has_card_on_pm: Boolean(pmObj?.card),
+              });
             } else if (pmObj.type !== "card") {
               console.warn("[Vault] skip: only card payment methods are vaulted (got type:", pmObj.type, ")");
             } else if (!shouldVault) {
               console.warn(
-                "[Vault] skip: customer did not opt to save on Checkout (allow_redisplay is not 'always'; got:",
-                allowRedisplay,
-                "). If you expect 'always', confirm Stripe API version on this function is Acacia+.",
+                "[Vault] skip: save card not opted in — save_card_checked_on_checkout=false and metadata save_payment_method≠true",
+                {
+                  save_card_checked_on_checkout: saveCardCheckedCheckout,
+                  allow_redisplay: allowRedisplay,
+                  legacy_metadata_save_payment_method: legacySaveFlag,
+                  hint: "If save was checked in Checkout but allow_redisplay is null, confirm API version is Acacia+ on this function.",
+                },
               );
             } else if (customerId && pmId && pmObj?.type === "card" && pmObj.card && shouldVault) {
               const { data: invRow, error: invFetchErr } = await supabase
@@ -388,9 +424,29 @@ serve(async (req: Request) => {
                 .single();
 
               if (invFetchErr || !invRow?.user_id || !invRow.email) {
-                console.warn("Vault skip: could not load invoice for client match", invFetchErr);
+                console.warn("[Vault] skip: could not load invoice for CRM email match", {
+                  inv_fetch_error: invFetchErr,
+                  has_user_id: Boolean(invRow?.user_id),
+                  has_invoice_email: Boolean(invRow?.email),
+                });
               } else {
                 const emailTrim = (invRow.email as string).trim();
+                const checkoutEmail = sessionPayerEmail;
+                const emailsMatchIgnoreCase = checkoutEmail
+                  ? checkoutEmail.toLowerCase() === emailTrim.toLowerCase()
+                  : null;
+
+                console.log("[Vault] invoice vs payer email (CRM vault uses invoice email only)", {
+                  invoice_id: invoiceId,
+                  merchant_user_id: invRow.user_id,
+                  invoice_email_trimmed: emailTrim,
+                  invoice_email_length: emailTrim.length,
+                  invoice_email_looks_valid: emailLooksValid(emailTrim),
+                  checkout_session_payer_email: checkoutEmail,
+                  checkout_vs_invoice_email_same_ignore_case: emailsMatchIgnoreCase,
+                  note: "Vault RPC matches CRM clients.email to invoice email; mismatch with Checkout payer email can still vault if invoice email matches a client row.",
+                });
+
                 const { data: vaultClientId, error: rpcErr } = await supabase.rpc(
                   "get_client_id_for_invoice_vault",
                   { p_user_id: invRow.user_id, p_email: emailTrim },
@@ -400,10 +456,18 @@ serve(async (req: Request) => {
                   console.error("[Vault] RPC get_client_id_for_invoice_vault error:", rpcErr);
                 } else if (!vaultClientId) {
                   console.warn(
-                    "[Vault] skip: no CRM client row with same email as invoice (case-insensitive). Invoice email:",
-                    emailTrim,
+                    "[Vault] skip: no CRM client row with same email as invoice (case-insensitive lookup)",
+                    {
+                      invoice_email_used_for_lookup: emailTrim,
+                      invoice_email_looks_valid: emailLooksValid(emailTrim),
+                    },
                   );
                 } else {
+                  console.log("[Vault] CRM client matched for vault update", {
+                    vault_client_id: vaultClientId,
+                    invoice_email: emailTrim,
+                  });
+
                   const { error: clientUpdErr } = await supabase
                     .from("clients")
                     .update({
@@ -420,15 +484,33 @@ serve(async (req: Request) => {
                   if (clientUpdErr) {
                     console.error("Vault: client row update error", clientUpdErr);
                   } else {
-                    console.log("Vault: client payment method persisted for", emailTrim);
+                    console.log("[Vault] client row updated: payment method persisted", {
+                      vault_client_id: vaultClientId,
+                      invoice_email: emailTrim,
+                      card_last4: pmObj.card.last4 ?? null,
+                    });
                   }
                 }
               }
             }
-          } else if (invoiceId && !connectedAccountId) {
-            console.warn(
-              "[Vault] skip: invoice_id present but event.account is missing — Connect direct charges require a connected-account webhook.",
-            );
+          } else if (invoiceId) {
+            console.log("[Vault] gate: vault not attempted (missing Connect account and/or PaymentIntent)", {
+              invoice_id: invoiceId,
+              has_connected_account: Boolean(connectedAccountId),
+              connected_account_id: connectedAccountId ?? null,
+              has_resolved_payment_intent: Boolean(paymentIntent?.id),
+              payment_intent_id_from_session_field: paymentIntentId ?? null,
+            });
+            if (!connectedAccountId) {
+              console.warn(
+                "[Vault] skip: invoice_id present but event.account is missing — Connect direct charges require a connected-account webhook.",
+              );
+            } else if (!paymentIntent?.id) {
+              console.warn(
+                "[Vault] skip: PaymentIntent not available after session retrieve; cannot read save-card or vault PM.",
+                { payment_intent_id_from_session: paymentIntentId },
+              );
+            }
           }
         } catch (vaultErr) {
           console.error("[stripe-webhook] vault persistence error (non-fatal):", vaultErr);

@@ -196,10 +196,6 @@ serve(async (req) => {
         invoice_number: invoice.invoice_number || "",
         client_name: invoice.client_name || "",
         amount: invoice.total || 0,
-        metadata: {
-          source: "stripe-charge-saved-invoice",
-          payment_intent_id: pi.id,
-        },
       });
     } catch (notifyErr) {
       console.error("notification/activity after charge:", notifyErr);

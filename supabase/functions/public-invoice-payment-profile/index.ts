@@ -36,7 +36,7 @@ serve(async (req) => {
 
     const { data: inv, error: invErr } = await supabase
       .from("invoices")
-      .select("id, user_id, status, company_name")
+      .select("id, user_id, status, company_name, email")
       .eq("id", invoiceId)
       .maybeSingle();
 
@@ -69,6 +69,43 @@ serve(async (req) => {
       });
     }
 
+    /** Payer card on file (same CRM match as webhook vault) — for public pay page + Checkout customer reuse. */
+    let invoice_payer_stripe_customer_id: string | null = null;
+    let invoice_payer_card_brand: string | null = null;
+    let invoice_payer_card_last4: string | null = null;
+    let invoice_payer_card_exp_month: number | null = null;
+    let invoice_payer_card_exp_year: number | null = null;
+
+    const invEmail = typeof inv.email === "string" ? inv.email.trim() : "";
+    if (inv.user_id && invEmail) {
+      const { data: vaultClientId, error: rpcErr } = await supabase.rpc(
+        "get_client_id_for_invoice_vault",
+        { p_user_id: inv.user_id, p_email: invEmail },
+      );
+      if (!rpcErr && vaultClientId) {
+        const { data: cl, error: clErr } = await supabase
+          .from("clients")
+          .select(
+            "stripe_customer_id, stripe_default_payment_method_id, card_brand, card_last4, card_exp_month, card_exp_year",
+          )
+          .eq("id", vaultClientId)
+          .maybeSingle();
+        if (
+          !clErr &&
+          cl?.stripe_customer_id &&
+          cl.stripe_default_payment_method_id
+        ) {
+          invoice_payer_stripe_customer_id = cl.stripe_customer_id;
+          invoice_payer_card_brand = cl.card_brand ?? null;
+          invoice_payer_card_last4 = cl.card_last4 ?? null;
+          invoice_payer_card_exp_month =
+            typeof cl.card_exp_month === "number" ? cl.card_exp_month : null;
+          invoice_payer_card_exp_year =
+            typeof cl.card_exp_year === "number" ? cl.card_exp_year : null;
+        }
+      }
+    }
+
     return new Response(
       JSON.stringify({
         company_name: profile.company_name ?? inv.company_name ?? null,
@@ -77,6 +114,11 @@ serve(async (req) => {
         stripe_account_id: profile.stripe_account_id ?? null,
         stripe_onboarding_completed: profile.stripe_onboarding_completed ?? false,
         stripe_charges_enabled: profile.stripe_charges_enabled ?? false,
+        invoice_payer_stripe_customer_id,
+        invoice_payer_card_brand,
+        invoice_payer_card_last4,
+        invoice_payer_card_exp_month,
+        invoice_payer_card_exp_year,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
