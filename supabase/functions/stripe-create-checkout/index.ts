@@ -33,8 +33,11 @@ interface CreateCheckoutRequest {
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
+    console.log("[stripe-create-checkout] OPTIONS (preflight)");
     return new Response(null, { headers: corsHeaders });
   }
+
+  console.log("[stripe-create-checkout] ← POST at", new Date().toISOString());
 
   try {
     // Initialize Stripe with secret key
@@ -141,6 +144,16 @@ serve(async (req) => {
     /** Public invoice pay (email/SMS link → /invoice/payment/:id → Checkout). */
     const isInvoiceCheckout = Boolean(body.metadata?.invoice_id);
 
+    console.log("[stripe-create-checkout] request summary", {
+      flow: body.connectedAccountId ? "public_invoice" : "authenticated",
+      connectedAccountId: stripeAccountId,
+      isInvoiceCheckout,
+      invoice_id: body.metadata?.invoice_id ?? null,
+      line_items: body.lineItems?.length ?? 0,
+      total_cents: totalAmount,
+      checkout_save_card_ui: isInvoiceCheckout ? "Stripe saved_payment_method_options" : "none_or_legacy",
+    });
+
     // Create checkout session on connected account
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
       mode: "payment",
@@ -210,12 +223,11 @@ serve(async (req) => {
       stripeAccount: stripeAccountId,
     });
 
-    console.log("Created checkout session:", {
+    console.log("[stripe-create-checkout] session created → redirect client to Stripe", {
       sessionId: session.id,
       connectedAccountId: stripeAccountId,
       totalAmount,
       applicationFeeAmount,
-      url: session.url,
     });
 
     return new Response(

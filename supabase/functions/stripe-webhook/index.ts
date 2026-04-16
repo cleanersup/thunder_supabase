@@ -15,8 +15,11 @@ const corsHeaders = {
 serve(async (req: Request) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
+    console.log("[stripe-webhook] OPTIONS (preflight)");
     return new Response(null, { headers: corsHeaders });
   }
+
+  console.log("[stripe-webhook] ←", req.method, "at", new Date().toISOString());
 
   try {
     // Initialize Stripe
@@ -26,6 +29,7 @@ serve(async (req: Request) => {
     if (!stripeSecretKey || !webhookSecret) {
       throw new Error("Stripe configuration missing");
     }
+    console.log("[stripe-webhook] env ok (STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET present)");
 
     // Pin a stable Acacia-era version so PaymentMethod.allow_redisplay is populated (Checkout save-card vault).
     // Prefer stable dated versions over .preview in production — see https://docs.stripe.com/api/versioning
@@ -51,10 +55,16 @@ serve(async (req: Request) => {
     let event: Stripe.Event;
     try {
       event = await stripe.webhooks.constructEventAsync(body, signature, webhookSecret);
-      console.log("Webhook verified:", event.type);
+      console.log(
+        "[stripe-webhook] signature OK →",
+        `type=${event.type}`,
+        `event_id=${event.id}`,
+        `livemode=${event.livemode}`,
+        `account=${(event as Stripe.Event & { account?: string }).account ?? "(none)"}`,
+      );
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Internal server error";
-      console.error("Webhook signature verification failed:", errorMessage);
+      console.error("[stripe-webhook] signature FAILED:", errorMessage);
       return new Response(
         JSON.stringify({ error: errorMessage }),
         {
@@ -68,9 +78,16 @@ serve(async (req: Request) => {
     switch (event.type) {
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
-        console.log("Checkout session completed:", session.id);
-
         const connectedAccountId = event.account; // Connect: acct_…; required for direct charges on connected account
+
+        console.log("[stripe-webhook] checkout.session.completed", {
+          session_id: session.id,
+          mode: session.mode,
+          payment_status: session.payment_status,
+          account: connectedAccountId ?? null,
+          metadata_keys: session.metadata ? Object.keys(session.metadata) : [],
+          invoice_id: session.metadata?.invoice_id ?? null,
+        });
 
         if (!connectedAccountId && session.mode === "payment") {
           console.warn(
@@ -165,12 +182,14 @@ serve(async (req: Request) => {
         }
 
         if (session.mode !== "payment") {
-          console.log("checkout.session.completed: non-payment mode ignored:", session.mode);
+          console.log("[stripe-webhook] skip: session.mode is not payment:", session.mode);
           break;
         }
 
         // Extract merchant user ID from metadata
         const merchantUserId = session.metadata?.merchant_user_id;
+
+        console.log("[stripe-webhook] retrieving session + PI on connected account…");
 
         // Retrieve the full session with line items
         const fullSession = await stripe.checkout.sessions.retrieve(session.id, {
@@ -180,6 +199,11 @@ serve(async (req: Request) => {
 
         // Get payment intent details
         const paymentIntent = fullSession.payment_intent as Stripe.PaymentIntent;
+
+        console.log("[stripe-webhook] expanded session", {
+          payment_intent_id: paymentIntent?.id ?? null,
+          amount_total: fullSession.amount_total,
+        });
 
         // Log the successful payment
         const paymentData = {
@@ -197,7 +221,7 @@ serve(async (req: Request) => {
           created_at: new Date().toISOString(),
         };
 
-        console.log("Payment completed:", paymentData);
+        console.log("[stripe-webhook] payment snapshot (before DB writes):", paymentData);
 
         // Extract metadata
         const invoiceId = session.metadata?.invoice_id;
@@ -217,9 +241,9 @@ serve(async (req: Request) => {
         });
 
         if (paymentError) {
-          console.error("Error storing payment data:", paymentError);
+          console.error("[stripe-webhook] payments INSERT failed:", paymentError);
         } else {
-          console.log("Payment record stored successfully");
+          console.log("[stripe-webhook] payments INSERT ok", { invoice_id: invoiceId ?? null });
         }
 
         // Update invoice status if invoice_id exists in metadata
@@ -238,9 +262,9 @@ serve(async (req: Request) => {
             .single();
 
           if (invoiceError) {
-            console.error("Error updating invoice:", invoiceError);
+            console.error("[stripe-webhook] invoice UPDATE failed:", invoiceError);
           } else {
-            console.log("Invoice marked as paid:", {
+            console.log("[stripe-webhook] invoice UPDATE → Paid", {
               invoiceId,
               invoiceNumber: invoice.invoice_number,
               clientName: invoice.client_name,
@@ -398,9 +422,12 @@ serve(async (req: Request) => {
             );
           }
         } catch (vaultErr) {
-          console.error("Vault persistence error (non-fatal):", vaultErr);
+          console.error("[stripe-webhook] vault persistence error (non-fatal):", vaultErr);
         }
 
+        console.log("[stripe-webhook] checkout.session.completed handler finished", {
+          session_id: session.id,
+        });
         break;
       }
 
@@ -496,17 +523,18 @@ serve(async (req: Request) => {
       }
 
       default:
-        console.log("Unhandled event type:", event.type);
+        console.log("[stripe-webhook] unhandled event type (200 OK):", event.type);
     }
 
     // Return success response
+    console.log("[stripe-webhook] → 200 received=true", event.type);
     return new Response(JSON.stringify({ received: true }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
       status: 200,
     });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Internal server error";
-    console.error("Error in stripe-webhook:", errorMessage);
+    console.error("[stripe-webhook] → 400 top-level error:", errorMessage);
     return new Response(
       JSON.stringify({
         error: errorMessage,

@@ -240,3 +240,38 @@ npx cap run ios
 
 #Phone
 iPhone 17 Pro Max (simulator) (00360C5F-8C56-4CC9-836E-4E73D52BDA64)
+
+# --- Stripe webhooks: invoice Paid + Saved client cards (Connect) ---
+# Code/migrations are not enough — Stripe must POST checkout.session.completed to stripe-webhook.
+#
+# If Workbench → Webhooks shows “Total: 0” / no event deliveries after a real Checkout pay:
+#   Add (or use) the CLASSIC Connect webhook — Stripe’s Connect doc points here, not only Workbench:
+#   https://dashboard.stripe.com/test/webhooks   (toggle Test mode ON)
+#   Add endpoint → same HTTPS URL → “Listen to” = **Events on connected accounts**
+#   → select event **checkout.session.completed** → save → copy THAT endpoint’s whsec_…
+#   Workbench “destinations” sometimes show zero deliveries while classic webhooks work.
+#
+# 1) Endpoint URL examples:
+#    https://PROJECT_REF.supabase.co/functions/v1/stripe-webhook
+#    OR custom domain: https://staging.thunderpro.co/functions/v1/stripe-webhook
+#
+# 2) Stripe Dashboard (same mode as your keys: Test vs Live)
+#    Prefer: Developers → Webhooks (link above) for Connect + checkout.session.completed
+#    Events: at least checkout.session.completed
+#    For Connect (Checkout on connected accounts): “Listen to” MUST be **Events on connected accounts**
+#    (see https://docs.stripe.com/connect/webhooks )
+#    After saving, open the endpoint → Signing secret → copy whsec_...
+#
+# 3) Supabase Dashboard → Project Settings → Edge Functions → Secrets
+#    STRIPE_WEBHOOK_SECRET = whsec_... (must match the endpoint from step 2)
+#    STRIPE_SECRET_KEY = same Stripe mode (sk_test_... or sk_live_...)
+#    Redeploy stripe-webhook if secrets were wrong before (supabase functions deploy stripe-webhook).
+#
+# 4) Verify after one test payment
+#    Stripe → Webhooks → endpoint → Recent deliveries → checkout.session.completed → HTTP 200
+#    Supabase → Edge Functions → stripe-webhook → Logs → "Webhook verified", "[Vault]" lines
+#    SQL: SELECT stripe_default_payment_method_id FROM public.clients WHERE ...;
+#
+# 5) Local dev: Stripe cannot reach localhost without CLI:
+#    stripe listen --forward-to http://127.0.0.1:54321/functions/v1/stripe-webhook
+#    Put CLI whsec into supabase/functions/.env STRIPE_WEBHOOK_SECRET, restart supabase functions serve.
