@@ -158,15 +158,7 @@ serve(async (req: Request) => {
               total: invoice.total,
             });
 
-            // Call send-invoice-email edge function to send payment confirmation
-            try {
-              await supabase.functions.invoke("send-invoice-email", {
-                body: { invoiceId, isPaymentConfirmation: true },
-              });
-              console.log("Payment confirmation email triggered");
-            } catch (emailError) {
-              console.error("Error triggering payment confirmation email:", emailError);
-            }
+            // Client + merchant payment emails: DB trigger notify_invoice_paid_send_confirmation_email → send-invoice-email
 
             // Create notification for the merchant
             try {
