@@ -79,7 +79,14 @@ serve(async (req) => {
         console.error("Error recording payment:", paymentError);
       }
 
-      // Client + merchant confirmation emails are sent by DB trigger → send-invoice-email (isPaymentConfirmation)
+      try {
+        const { error: emailErr } = await supabase.functions.invoke("send-invoice-email", {
+          body: { invoiceId, isPaymentConfirmation: true },
+        });
+        if (emailErr) console.error("send-invoice-email (paid):", emailErr);
+      } catch (e) {
+        console.error("send-invoice-email invoke failed:", e);
+      }
 
       return new Response(
         JSON.stringify({

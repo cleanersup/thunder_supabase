@@ -158,7 +158,19 @@ serve(async (req: Request) => {
               total: invoice.total,
             });
 
-            // Client + merchant payment emails: DB trigger notify_invoice_paid_send_confirmation_email → send-invoice-email
+            try {
+              const { error: paidEmailError } = await supabase.functions.invoke(
+                "send-invoice-email",
+                { body: { invoiceId, isPaymentConfirmation: true } },
+              );
+              if (paidEmailError) {
+                console.error("send-invoice-email (paid):", paidEmailError);
+              } else {
+                console.log("Payment confirmation emails queued via send-invoice-email");
+              }
+            } catch (emailErr) {
+              console.error("send-invoice-email invoke failed:", emailErr);
+            }
 
             // Create notification for the merchant
             try {
