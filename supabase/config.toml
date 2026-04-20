@@ -108,6 +108,9 @@ verify_jwt = false
 [functions.send-verification-email]
 verify_jwt = false
 
+[functions.notify-internal-registration]
+verify_jwt = false
+
 [functions.send-invoice-sms]
 verify_jwt = false
 
