@@ -282,7 +282,7 @@ serve(async (req) => {
     const { data: paidInvoices, error: invoicesError } = await supabase
       .from('invoices')
       .select('*')
-      .eq('status', 'paid')
+      .eq('status', 'Paid')
       .gte('paid_date', today.toISOString().split('T')[0])
       .lt('paid_date', tomorrow.toISOString().split('T')[0])
       .not('user_id', 'is', null)
@@ -360,7 +360,7 @@ serve(async (req) => {
         .from('invoices')
         .select('total, paid_date')
         .eq('user_id', userId)
-        .eq('status', 'paid')
+        .eq('status', 'Paid')
         .gte('paid_date', lastSunday.toISOString().split('T')[0]);
 
       const dailyTotals = weekDays.map(date => {

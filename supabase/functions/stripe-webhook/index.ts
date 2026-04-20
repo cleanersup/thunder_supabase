@@ -79,12 +79,16 @@ serve(async (req: Request) => {
         });
 
         // Get payment intent details
-        const paymentIntent = fullSession.payment_intent as Stripe.PaymentIntent;
+        const piRaw = fullSession.payment_intent;
+        const paymentIntent =
+          typeof piRaw === "string" ? null : (piRaw as Stripe.PaymentIntent | null);
+        const paymentIntentId =
+          typeof piRaw === "string" ? piRaw : paymentIntent?.id ?? null;
 
         // Log the successful payment
         const paymentData = {
           session_id: session.id,
-          payment_intent_id: paymentIntent?.id,
+          payment_intent_id: paymentIntentId,
           connected_account_id: connectedAccountId,
           merchant_user_id: merchantUserId,
           customer_email: session.customer_details?.email,
@@ -100,7 +104,13 @@ serve(async (req: Request) => {
         console.log("Payment completed:", paymentData);
 
         // Extract metadata
-        const invoiceId = session.metadata?.invoice_id;
+        const invoiceIdRaw = session.metadata?.invoice_id;
+        const invoiceId =
+          typeof invoiceIdRaw === "string"
+            ? invoiceIdRaw.trim()
+            : invoiceIdRaw != null
+              ? String(invoiceIdRaw)
+              : undefined;
         const merchantUserIdFromMetadata = session.metadata?.merchant_user_id;
 
         // Store payment data in database
@@ -110,7 +120,7 @@ serve(async (req: Request) => {
           amount: session.amount_total! / 100, // Convert cents to major currency
           currency: session.currency || "usd",
           status: session.payment_status === "paid" ? "succeeded" : "failed",
-          stripe_payment_intent_id: paymentIntent?.id,
+          stripe_payment_intent_id: paymentIntentId,
           stripe_session_id: session.id,
           payment_method: session.payment_method_types?.[0],
           metadata: session.metadata,
@@ -129,7 +139,8 @@ serve(async (req: Request) => {
             .update({
               status: "Paid",
               paid_at: new Date().toISOString(),
-              stripe_payment_intent_id: paymentIntent?.id,
+              paid_date: new Date().toISOString().split("T")[0],
+              stripe_payment_intent_id: paymentIntentId,
               stripe_session_id: session.id,
               payment_method: session.payment_method_types?.[0] || 'stripe',
             })

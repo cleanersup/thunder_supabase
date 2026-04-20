@@ -156,8 +156,8 @@ serve(async (req) => {
         throw new Error('Invoice not found');
       }
 
-      // Check if already paid
-      if (invoice.status === 'paid') {
+      // Check if already paid (DB uses title-case per invoices_status_check)
+      if (invoice.status === 'Paid') {
         throw new Error('Invoice already paid');
       }
 
@@ -165,7 +165,7 @@ serve(async (req) => {
       const { error: updateError } = await supabase
         .from('invoices')
         .update({
-          status: 'paid',
+          status: 'Paid',
           payment_method: paymentMethod,
           paid_date: new Date().toISOString().split('T')[0],
         })

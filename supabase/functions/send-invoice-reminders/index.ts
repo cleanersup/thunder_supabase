@@ -194,7 +194,7 @@ serve(async (req) => {
           .from('invoices')
           .select('*')
           .eq('id', invoiceId)
-          .neq('status', 'paid')
+          .neq('status', 'Paid')
           .maybeSingle();
 
         if (invoiceError) {
@@ -224,7 +224,7 @@ serve(async (req) => {
         const { data, error: invoicesError } = await supabase
           .from('invoices')
           .select('*')
-          .neq('status', 'paid')
+          .neq('status', 'Paid')
           .eq('due_date', today)
           .eq('reminder_sent', false);
 
