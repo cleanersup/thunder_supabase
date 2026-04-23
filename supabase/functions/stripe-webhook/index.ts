@@ -253,7 +253,13 @@ serve(async (req: Request) => {
         console.log("[stripe-webhook] payment snapshot (before DB writes):", paymentData);
 
         // Extract metadata
-        const invoiceId = session.metadata?.invoice_id;
+        const invoiceIdRaw = session.metadata?.invoice_id;
+        const invoiceId =
+          typeof invoiceIdRaw === "string"
+            ? invoiceIdRaw.trim()
+            : invoiceIdRaw != null
+              ? String(invoiceIdRaw)
+              : undefined;
         const merchantUserIdFromMetadata = session.metadata?.merchant_user_id;
 
         // Store payment data in database
@@ -282,6 +288,7 @@ serve(async (req: Request) => {
             .update({
               status: "Paid",
               paid_at: new Date().toISOString(),
+              paid_date: new Date().toISOString().split("T")[0],
               stripe_payment_intent_id: paymentIntent?.id ?? paymentIntentId ?? null,
               stripe_session_id: session.id,
               payment_method: session.payment_method_types?.[0] || 'stripe',
@@ -300,14 +307,18 @@ serve(async (req: Request) => {
               total: invoice.total,
             });
 
-            // Call send-invoice-email edge function to send payment confirmation
             try {
-              await supabase.functions.invoke("send-invoice-email", {
-                body: { invoiceId, isPaymentConfirmation: true },
-              });
-              console.log("Payment confirmation email triggered");
-            } catch (emailError) {
-              console.error("Error triggering payment confirmation email:", emailError);
+              const { error: paidEmailError } = await supabase.functions.invoke(
+                "send-invoice-email",
+                { body: { invoiceId, isPaymentConfirmation: true } },
+              );
+              if (paidEmailError) {
+                console.error("send-invoice-email (paid):", paidEmailError);
+              } else {
+                console.log("Payment confirmation emails queued via send-invoice-email");
+              }
+            } catch (emailErr) {
+              console.error("send-invoice-email invoke failed:", emailErr);
             }
 
             // Create notification for the merchant

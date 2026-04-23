@@ -16,6 +16,8 @@ Sentry.init({
 interface InvoiceEmailRequest {
   invoiceId: string;
   isUpdate?: boolean;
+  /** Payment received: send thank-you to client + alert to merchant (not the “pay now” invoice email). */
+  isPaymentConfirmation?: boolean;
 }
 
 // SMTP email sending function
@@ -177,8 +179,8 @@ serve(async (req) => {
     }
 
     try {
-      const { invoiceId, isUpdate }: InvoiceEmailRequest = await req.json();
-      console.log('Processing invoice email for:', invoiceId, 'isUpdate:', isUpdate);
+      const { invoiceId, isUpdate, isPaymentConfirmation }: InvoiceEmailRequest = await req.json();
+      console.log('Processing invoice email for:', invoiceId, 'isUpdate:', isUpdate, 'isPaymentConfirmation:', isPaymentConfirmation);
 
       const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
       const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -207,9 +209,14 @@ serve(async (req) => {
       }
 
       const companyName = profile.company_name || 'Our Company';
-      const companyEmail = profile.company_email;
+      let ownerEmail: string | null = profile.company_email ?? null;
       const companyLogo = profile.company_logo;
       const userTimezone = profile.timezone || 'America/New_York';
+
+      if (!ownerEmail) {
+        const { data: authData } = await supabase.auth.admin.getUserById(invoice.user_id);
+        ownerEmail = authData.user?.email ?? null;
+      }
 
       // Helper function to format dates in user's timezone
       // FIX: invoice_date and due_date are stored as DATE (YYYY-MM-DD) without timezone info
@@ -241,6 +248,97 @@ serve(async (req) => {
 
       const invoiceDateFormatted = formatDateInTimezone(invoice.invoice_date, userTimezone);
       const dueDateFormatted = formatDateInTimezone(invoice.due_date, userTimezone);
+      const f = (n: number) => `$${n.toFixed(2)}`;
+
+      // ── Paid confirmation (client + merchant) — used by Stripe/manual flows via DB trigger or direct invoke
+      if (isPaymentConfirmation) {
+        const paidRaw = invoice.paid_date || new Date().toISOString().split("T")[0];
+        const paidDateFormatted = formatDateInTimezone(paidRaw, userTimezone);
+        const pmRaw = (invoice.payment_method || "Payment").toString();
+        const pmLabel = pmRaw.length > 0
+          ? pmRaw.charAt(0).toUpperCase() + pmRaw.slice(1)
+          : "Payment";
+
+        const clientPaidHtml = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:20px;font-family:Arial,sans-serif;background:#f5f5f5">
+<div style="max-width:600px;margin:0 auto;background:#fff">
+  <div style="text-align:center;padding:20px;background:#10b981;color:#fff">
+    <p style="margin:0;font-size:42px">✓</p>
+    <h1 style="margin:8px 0 0 0;font-size:22px">Payment received</h1>
+    <p style="margin:8px 0 0 0;font-size:14px">Thank you — your invoice is paid in full.</p>
+  </div>
+  <div style="padding:24px;color:#333">
+    <p style="margin:0 0 12px 0">Hello ${invoice.client_name},</p>
+    <p style="margin:0 0 20px 0">We’ve recorded your payment to <strong>${companyName}</strong>. Details below.</p>
+    <table cellpadding="0" cellspacing="0" style="width:100%;background:#f0fdf4;border-radius:6px">
+      <tr><td style="padding:16px">
+        <table cellpadding="0" cellspacing="0" style="width:100%">
+          <tr><td style="padding:6px 0"><strong>Invoice</strong></td><td style="padding:6px 0;text-align:right">${invoice.invoice_number}</td></tr>
+          <tr><td style="padding:6px 0"><strong>Amount paid</strong></td><td style="padding:6px 0;text-align:right;font-weight:bold;color:#059669">${f(Number(invoice.total) || 0)}</td></tr>
+          <tr><td style="padding:6px 0"><strong>Payment date</strong></td><td style="padding:6px 0;text-align:right">${paidDateFormatted}</td></tr>
+          <tr><td style="padding:6px 0"><strong>Method</strong></td><td style="padding:6px 0;text-align:right">${pmLabel}</td></tr>
+        </table>
+      </td></tr>
+    </table>
+    <p style="margin:20px 0 0 0;font-size:13px;color:#6b7280">If you have questions, reply to this email or contact ${companyName}.</p>
+  </div>
+  <div style="text-align:center;padding:16px;background:#1e3a8a;color:#fff;font-size:12px">
+    © Thunder Pro · <a href="https://www.thunderpro.co" style="color:#fff">thunderpro.co</a>
+  </div>
+</div></body></html>`;
+
+        const ownerPaidHtml = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:20px;font-family:Arial,sans-serif;background:#f5f5f5">
+<div style="max-width:600px;margin:0 auto;background:#fff">
+  <div style="text-align:center;padding:16px;background:#1e3a8a;color:#fff">
+    <p style="margin:0;font-size:12px;font-weight:bold;background:#1e40af;padding:8px;border-radius:4px;display:inline-block">OWNER · Payment received</p>
+    <h1 style="margin:12px 0 0 0;font-size:20px">Invoice marked paid</h1>
+  </div>
+  <div style="padding:24px;color:#333">
+    <p style="margin:0 0 8px 0"><strong>${invoice.client_name}</strong> paid invoice <strong>${invoice.invoice_number}</strong>.</p>
+    <table cellpadding="0" cellspacing="0" style="width:100%;margin-top:16px;background:#f0fdf4;border-radius:6px">
+      <tr><td style="padding:16px">
+        <table cellpadding="0" cellspacing="0" style="width:100%">
+          <tr><td style="padding:6px 0">Amount</td><td style="padding:6px 0;text-align:right;font-weight:bold">${f(Number(invoice.total) || 0)}</td></tr>
+          <tr><td style="padding:6px 0">Paid date</td><td style="padding:6px 0;text-align:right">${paidDateFormatted}</td></tr>
+          <tr><td style="padding:6px 0">Method</td><td style="padding:6px 0;text-align:right">${pmLabel}</td></tr>
+          <tr><td style="padding:6px 0">Client email</td><td style="padding:6px 0;text-align:right">${invoice.email}</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </div>
+  <div style="text-align:center;padding:16px;background:#1e3a8a;color:#fff;font-size:12px">
+    © Thunder Pro · <a href="https://www.thunderpro.co" style="color:#fff">thunderpro.co</a>
+  </div>
+</div></body></html>`;
+
+        console.log("Sending payment confirmation to client:", invoice.email);
+        await sendEmailViaSMTP(
+          invoice.email,
+          null,
+          `Payment received — Invoice ${invoice.invoice_number}`,
+          clientPaidHtml,
+        );
+
+        if (ownerEmail) {
+          console.log("Sending payment confirmation to merchant:", ownerEmail);
+          await sendEmailViaSMTP(
+            ownerEmail,
+            null,
+            `Invoice paid: ${invoice.invoice_number} — ${invoice.client_name}`,
+            ownerPaidHtml,
+          );
+        } else {
+          console.warn("No merchant email (company_email or auth email); skipping owner payment confirmation");
+        }
+
+        return new Response(
+          JSON.stringify({ success: true, message: "Payment confirmation emails sent" }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
 
       // Prepare invoice payment link (this would be a public page where client can pay)
       const publicAppUrlEnv = Deno.env.get('PUBLIC_APP_URL');
@@ -253,7 +351,8 @@ serve(async (req) => {
       console.log('SUPABASE_URL from env:', supabaseUrlEnv || 'NOT SET');
 
       const publicAppUrl = publicAppUrlEnv || appUrlEnv || 'https://app.staging.thunderpro.co';
-      const paymentLink = `${publicAppUrl}/invoice/payment/${invoiceId}`;
+      // Use payment_token (opaque) instead of raw UUID to prevent URL enumeration
+      const paymentLink = `${publicAppUrl}/invoice/payment/${invoice.payment_token || invoiceId}`;
 
       // Public Supabase URL for Edge Functions (download PDF, tracking pixel, etc.)
       // Must be publicly accessible — SUPABASE_URL may be internal (e.g. kong:8000).
@@ -269,7 +368,6 @@ serve(async (req) => {
       const trackingPixelUrl = `${publicSupabaseUrl}/functions/v1/mark-viewed?type=invoice&id=${invoiceId}`;
 
       // Email to Client - Gmail-compatible HTML (tables only, inline styles)
-      const f = (n: number) => `$${n.toFixed(2)}`;
       const clientEmailHtml = `<!DOCTYPE html>
 <html>
 <head>
@@ -605,11 +703,11 @@ serve(async (req) => {
       console.log('Client email sent successfully');
 
       // Send confirmation email to owner
-      if (companyEmail) {
-        console.log('Sending owner notification to:', companyEmail);
+      if (ownerEmail) {
+        console.log('Sending owner notification to:', ownerEmail);
 
         await sendEmailViaSMTP(
-          companyEmail,
+          ownerEmail,
           null,
           ownerSubject,
           ownerEmailHtml

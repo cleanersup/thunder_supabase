@@ -28,6 +28,70 @@ interface CreateCheckoutRequest {
   connectedAccountId?: string; // Optional: for public invoice payments
   /** When true, attaches PM to Customer for off-session reuse (default false = unchanged behavior). */
   savePaymentMethod?: boolean;
+  /** Required for public (unauthenticated) payments */
+  recaptchaToken?: string;
+}
+
+/**
+ * Verify a reCAPTCHA v3 token with Google.
+ * Returns success=true only if the token is valid and score >= 0.5.
+ * If RECAPTCHA_SECRET_KEY is not configured, allows the request through
+ * with a warning so a missing env var doesn't silently break payments.
+ */
+async function verifyRecaptchaToken(
+  token: string
+): Promise<{ success: boolean; score: number }> {
+  const secretKey = Deno.env.get("RECAPTCHA_SECRET_KEY");
+  if (!secretKey) {
+    console.warn("RECAPTCHA_SECRET_KEY not configured — skipping reCAPTCHA check");
+    return { success: true, score: 1 };
+  }
+
+  const res = await fetch("https://www.google.com/recaptcha/api/siteverify", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: `secret=${secretKey}&response=${token}`,
+  });
+  const data = await res.json();
+  const MIN_SCORE = 0.5;
+  console.log("reCAPTCHA result:", { success: data.success, score: data.score, action: data.action });
+  return {
+    success: Boolean(data.success) && (data.score ?? 0) >= MIN_SCORE,
+    score: data.score ?? 0,
+  };
+}
+
+/** Write a row to payment_fraud_attempts — non-fatal if it fails */
+async function logFraudAttempt(
+  supabase: ReturnType<typeof createClient>,
+  params: {
+    invoiceId: string | null;
+    merchantUserId: string | null;
+    reason: string;
+    req: Request;
+    metadata?: Record<string, unknown>;
+  }
+) {
+  const ip =
+    params.req.headers.get("cf-connecting-ip") ??
+    params.req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    null;
+  const userAgent = params.req.headers.get("user-agent") ?? null;
+
+  const { error } = await supabase.from("payment_fraud_attempts").insert({
+    invoice_id:       params.invoiceId,
+    merchant_user_id: params.merchantUserId,
+    reason:           params.reason,
+    ip_address:       ip,
+    user_agent:       userAgent,
+    metadata:         params.metadata ?? {},
+  });
+
+  if (error) {
+    console.error("Warning: could not log fraud attempt:", error.message);
+  } else {
+    console.log("Fraud attempt logged:", params.reason, "invoice:", params.invoiceId);
+  }
 }
 
 serve(async (req) => {
@@ -64,6 +128,38 @@ serve(async (req) => {
 
     // Check if this is a public invoice payment (no auth required)
     if (body.connectedAccountId) {
+      // Public flow: verify reCAPTCHA before doing anything else
+      if (!body.recaptchaToken) {
+        console.warn("Public payment attempt without reCAPTCHA token");
+        await logFraudAttempt(supabase, {
+          invoiceId:        body.metadata?.invoice_id ?? null,
+          merchantUserId:   body.metadata?.merchant_user_id ?? null,
+          reason:           "recaptcha_missing",
+          req,
+          metadata:         { customer_email: body.customerEmail },
+        });
+        return new Response(
+          JSON.stringify({ error: "Payment verification failed. Please try again." }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 403 }
+        );
+      }
+
+      const recaptcha = await verifyRecaptchaToken(body.recaptchaToken);
+      if (!recaptcha.success) {
+        console.warn("reCAPTCHA verification failed — possible bot:", recaptcha.score);
+        await logFraudAttempt(supabase, {
+          invoiceId:        body.metadata?.invoice_id ?? null,
+          merchantUserId:   body.metadata?.merchant_user_id ?? null,
+          reason:           "recaptcha_failed",
+          req,
+          metadata:         { customer_email: body.customerEmail, recaptcha_score: recaptcha.score },
+        });
+        return new Response(
+          JSON.stringify({ error: "Payment verification failed. Please try again." }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 403 }
+        );
+      }
+
       // Public flow: use provided connectedAccountId
       stripeAccountId = body.connectedAccountId;
       console.log("Public payment flow - using connected account:", stripeAccountId);
@@ -108,6 +204,78 @@ serve(async (req) => {
     if (!body.lineItems || body.lineItems.length === 0) {
       throw new Error("At least one line item is required");
     }
+
+    // ── Anti-fraud: idempotency + duplicate-payment guard ─────────────────────
+    // Only applies when an invoice_id is present in the request metadata
+    const invoiceId = body.metadata?.invoice_id;
+    if (invoiceId) {
+      const { data: invoice, error: invoiceFetchError } = await supabase
+        .from("invoices")
+        .select("id, status, stripe_session_id")
+        .eq("id", invoiceId)
+        .single();
+
+      if (invoiceFetchError || !invoice) {
+        return new Response(
+          JSON.stringify({ error: "Invoice not found" }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 404 }
+        );
+      }
+
+      // 1. Reject if invoice is already paid
+      if (invoice.status === "Paid") {
+        console.log("Blocked duplicate payment attempt for already-paid invoice:", invoiceId);
+        await logFraudAttempt(supabase, {
+          invoiceId,
+          merchantUserId: body.metadata?.merchant_user_id ?? null,
+          reason: "already_paid",
+          req,
+          metadata: { customer_email: body.customerEmail },
+        });
+        return new Response(
+          JSON.stringify({ error: "This invoice has already been paid." }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 409 }
+        );
+      }
+
+      // 2. If an active Stripe session already exists, return it instead of creating a new one
+      if (invoice.stripe_session_id) {
+        try {
+          const existingSession = await stripe.checkout.sessions.retrieve(
+            invoice.stripe_session_id,
+            { stripeAccount: stripeAccountId }
+          );
+          if (existingSession.status === "open") {
+            console.log("Returning existing active checkout session:", existingSession.id);
+            await logFraudAttempt(supabase, {
+              invoiceId,
+              merchantUserId: body.metadata?.merchant_user_id ?? null,
+              reason: "duplicate_session",
+              req,
+              metadata: {
+                customer_email:      body.customerEmail,
+                existing_session_id: existingSession.id,
+              },
+            });
+            return new Response(
+              JSON.stringify({
+                url: existingSession.url,
+                sessionId: existingSession.id,
+                connectedAccountId: stripeAccountId,
+                existingSession: true,
+              }),
+              { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+            );
+          }
+          // Session expired or completed — continue to create a new one
+          console.log("Existing session is no longer open, creating new one:", existingSession.status);
+        } catch (sessionErr) {
+          // Session not retrievable — continue to create a new one
+          console.log("Could not retrieve existing session, creating new one:", sessionErr.message);
+        }
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     // Calculate total amount
     const totalAmount = body.lineItems.reduce(
@@ -229,6 +397,23 @@ serve(async (req) => {
       totalAmount,
       applicationFeeAmount,
     });
+
+    // Persist the new session_id on the invoice immediately so any subsequent
+    // request (refresh, second browser tab, mobile app) returns this same session
+    // instead of creating a new one — webhook will overwrite this with "Paid" when done.
+    if (invoiceId) {
+      const { error: updateError } = await supabase
+        .from("invoices")
+        .update({ stripe_session_id: session.id })
+        .eq("id", invoiceId);
+
+      if (updateError) {
+        console.error("Warning: could not save stripe_session_id to invoice:", updateError);
+        // Non-fatal — payment can still proceed; guard will just be weaker this attempt
+      } else {
+        console.log("Saved stripe_session_id to invoice:", invoiceId);
+      }
+    }
 
     return new Response(
       JSON.stringify({
