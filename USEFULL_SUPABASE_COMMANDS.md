@@ -198,6 +198,23 @@ WHERE user_id = (
     WHERE email = 'info@cleanersup.com'
 );
 
+#DELETE USER (irreversible — run SELECT first to confirm the row)
+#Each line below must be run as a full SQL statement (starts with SELECT or DELETE). Do not paste only the WHERE clause.
+#Deletes public profile row, then removes the auth account (login + auth.* cascades on hosted Supabase).
+#If DELETE FROM auth.users fails with a FK error, remove or fix the referencing row in the table named in the error, then retry.
+
+#Preview user before delete
+SELECT u.id, u.email, u.created_at
+FROM auth.users u
+WHERE u.email = 'info@cleanersup.com';
+
+DELETE FROM public.profiles p
+USING auth.users u
+WHERE p.user_id = u.id AND u.email = 'info@cleanersup.com';
+
+DELETE FROM auth.users
+WHERE email = 'info@cleanersup.com';
+
 #FIND USER WITH BY REVENUECAT ID:
 SELECT 
     u.id as user_id,
@@ -223,3 +240,62 @@ npx cap run ios
 
 #Phone
 iPhone 17 Pro Max (simulator) (00360C5F-8C56-4CC9-836E-4E73D52BDA64)
+
+# --- Stripe webhooks: invoice Paid + Saved client cards (Connect) ---
+# Code/migrations are not enough — Stripe must POST checkout.session.completed to stripe-webhook.
+#
+# If Workbench → Webhooks shows “Total: 0” / no event deliveries after a real Checkout pay:
+#   Add (or use) the CLASSIC Connect webhook — Stripe’s Connect doc points here, not only Workbench:
+#   https://dashboard.stripe.com/test/webhooks   (toggle Test mode ON)
+#   Add endpoint → same HTTPS URL → “Listen to” = **Events on connected accounts**
+#   → select event **checkout.session.completed** → save → copy THAT endpoint’s whsec_…
+#   Workbench “destinations” sometimes show zero deliveries while classic webhooks work.
+#
+# 1) Endpoint URL examples:
+#    https://PROJECT_REF.supabase.co/functions/v1/stripe-webhook
+#    OR custom domain: https://staging.thunderpro.co/functions/v1/stripe-webhook
+#
+# 2) Stripe Dashboard (same mode as your keys: Test vs Live)
+#    Prefer: Developers → Webhooks (link above) for Connect + checkout.session.completed
+#    Events: at least checkout.session.completed
+#    For Connect (Checkout on connected accounts): “Listen to” MUST be **Events on connected accounts**
+#    (see https://docs.stripe.com/connect/webhooks )
+#    After saving, open the endpoint → Signing secret → copy whsec_...
+#
+# 3) Supabase Dashboard → Project Settings → Edge Functions → Secrets
+#    STRIPE_WEBHOOK_SECRET = whsec_... (must match the endpoint from step 2)
+#    STRIPE_SECRET_KEY = same Stripe mode (sk_test_... or sk_live_...)
+#    Redeploy stripe-webhook if secrets were wrong before (supabase functions deploy stripe-webhook).
+#
+# 4) Verify after one test payment
+#    Stripe → Webhooks → endpoint → Recent deliveries → checkout.session.completed → HTTP 200
+#    Supabase → Edge Functions → stripe-webhook → Logs → "Webhook verified", "[Vault]" lines
+#    SQL: SELECT stripe_default_payment_method_id FROM public.clients WHERE ...;
+#
+# 5) Local dev: Stripe cannot reach localhost without CLI:
+#    stripe listen --forward-to http://127.0.0.1:54321/functions/v1/stripe-webhook
+#    Put CLI whsec into supabase/functions/.env STRIPE_WEBHOOK_SECRET, restart supabase functions serve.
+
+# --- Stripe webhook: zero deliveries / no Docker logs (self-hosted staging.thunderpro.co) ---
+#
+# A) Prove traffic reaches the edge function (bypasses Stripe):
+#    curl -sS "https://staging.thunderpro.co/functions/v1/stripe-webhook"
+#    Expect JSON: {"ok":true,"fn":"stripe-webhook"}  AND docker logs show: [stripe-webhook] GET health check
+#    If curl fails or no log line → Kong/nginx/DNS in front of Supabase, not Stripe.
+#
+# B) Prove POST reaches the function (signature will fail — OK for this test):
+#    curl -sS -i -X POST "https://staging.thunderpro.co/functions/v1/stripe-webhook" \
+#      -H "Content-Type: application/json" -d '{}'
+#    Expect HTTP 400 and Docker logs: [stripe-webhook] ← POST … then signature FAILED or Missing stripe-signature
+#    If HTTP 401 before any [stripe-webhook] line → Kong JWT: ensure config.toml has
+#       [functions.stripe-webhook] verify_jwt = false
+#    then redeploy/reload edge functions so the gateway applies it (see GitHub supabase discussions re 401 + verify_jwt).
+#
+# C) Stripe Dashboard: Workbench can show "Total: 0" deliveries. Also add CLASSIC endpoint:
+#    https://dashboard.stripe.com/test/webhooks → Add endpoint → same URL
+#    → Listen to: Events on connected accounts → event checkout.session.completed
+#    → copy THAT signing secret into STRIPE_WEBHOOK_SECRET (Workbench vs classic = different whsec).
+#
+# D) On the destination, click "Show" next to "Listening to: 1 event" — must be exactly checkout.session.completed.
+#
+# E) whsec_ must be copied again after you "Roll" the secret in Stripe; update Supabase secrets and restart edge if needed.
