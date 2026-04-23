@@ -143,3 +143,9 @@ verify_jwt = false
 
 [functions.handle-email-bounce]
 verify_jwt = false
+
+[functions.request-client-portal-magic-link]
+verify_jwt = false
+
+[functions.validate-client-portal-magic-link]
+verify_jwt = false
