@@ -178,7 +178,7 @@ serve(async (req: Request) => {
       }
     }
 
-    const { data: linkGen, error: linkErr } = await supabase.auth.admin
+    const { data: linkGen, error: generateLinkErr } = await supabase.auth.admin
       .generateLink({
         type: "magiclink",
         email: emailNorm,
@@ -186,8 +186,8 @@ serve(async (req: Request) => {
 
     const hashed = linkGen?.properties?.hashed_token;
 
-    if (linkErr || !hashed) {
-      console.error("generateLink:", linkErr, linkGen);
+    if (generateLinkErr || !hashed) {
+      console.error("generateLink:", generateLinkErr, linkGen);
       return new Response(
         JSON.stringify({ error: "Could not complete sign-in. Try again." }),
         {

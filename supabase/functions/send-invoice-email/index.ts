@@ -258,6 +258,8 @@ serve(async (req) => {
         const pmLabel = pmRaw.length > 0
           ? pmRaw.charAt(0).toUpperCase() + pmRaw.slice(1)
           : "Payment";
+        const clientPortalBase = (Deno.env.get("CLIENT_PORTAL_URL") || "https://portal.thunderpro.co").replace(/\/$/, "");
+        const clientPortalLoginUrl = `${clientPortalBase}/login?owner=${encodeURIComponent(invoice.user_id)}`;
 
         const clientPaidHtml = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"></head>
@@ -281,6 +283,10 @@ serve(async (req) => {
         </table>
       </td></tr>
     </table>
+    <div style="text-align:center;margin:24px 0 8px 0">
+      <a href="${clientPortalLoginUrl}" style="display:inline-block;background:#2563eb;color:#ffffff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:bold">Open client portal</a>
+    </div>
+    <p style="margin:0 0 20px 0;font-size:13px;color:#6b7280;text-align:center">Use your email address to receive a secure access link.</p>
     <p style="margin:20px 0 0 0;font-size:13px;color:#6b7280">If you have questions, reply to this email or contact ${companyName}.</p>
   </div>
   <div style="text-align:center;padding:16px;background:#1e3a8a;color:#fff;font-size:12px">
