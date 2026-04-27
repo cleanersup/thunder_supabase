@@ -26,7 +26,10 @@ interface CreateCheckoutRequest {
   metadata?: Record<string, string>;
   applicationFeeAmount?: number; // Platform fee in cents (default: 0)
   connectedAccountId?: string; // Optional: for public invoice payments
-  recaptchaToken?: string;     // Required for public (unauthenticated) payments
+  /** When true, attaches PM to Customer for off-session reuse (default false = unchanged behavior). */
+  savePaymentMethod?: boolean;
+  /** Required for public (unauthenticated) payments */
+  recaptchaToken?: string;
 }
 
 /**
@@ -94,8 +97,11 @@ async function logFraudAttempt(
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
+    console.log("[stripe-create-checkout] OPTIONS (preflight)");
     return new Response(null, { headers: corsHeaders });
   }
+
+  console.log("[stripe-create-checkout] ← POST at", new Date().toISOString());
 
   try {
     // Initialize Stripe with secret key
@@ -103,8 +109,9 @@ serve(async (req) => {
     if (!stripeSecretKey) {
       throw new Error("STRIPE_SECRET_KEY not configured");
     }
+    // Stable Acacia+ (not .preview) — https://docs.stripe.com/api/versioning
     const stripe = new Stripe(stripeSecretKey, {
-      apiVersion: "2023-10-16",
+      apiVersion: "2024-11-20.acacia",
       httpClient: Stripe.createFetchHttpClient(),
     });
 
@@ -301,6 +308,20 @@ serve(async (req) => {
         quantity: item.quantity,
       }));
 
+    const savePaymentMethod = body.savePaymentMethod === true;
+    /** Public invoice pay (email/SMS link → /invoice/payment/:id → Checkout). */
+    const isInvoiceCheckout = Boolean(body.metadata?.invoice_id);
+
+    console.log("[stripe-create-checkout] request summary", {
+      flow: body.connectedAccountId ? "public_invoice" : "authenticated",
+      connectedAccountId: stripeAccountId,
+      isInvoiceCheckout,
+      invoice_id: body.metadata?.invoice_id ?? null,
+      line_items: body.lineItems?.length ?? 0,
+      total_cents: totalAmount,
+      checkout_save_card_ui: isInvoiceCheckout ? "Stripe saved_payment_method_options" : "none_or_legacy",
+    });
+
     // Create checkout session on connected account
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
       mode: "payment",
@@ -310,6 +331,7 @@ serve(async (req) => {
       metadata: {
         ...(userId && { merchant_user_id: userId }),
         ...body.metadata,
+        ...(!isInvoiceCheckout && savePaymentMethod ? { save_payment_method: "true" } : {}),
       },
       payment_intent_data: {
         // This is where application fees are set
@@ -317,12 +339,48 @@ serve(async (req) => {
         metadata: {
           ...(userId && { merchant_user_id: userId }),
           ...body.metadata,
+          ...(!isInvoiceCheckout && savePaymentMethod ? { save_payment_method: "true" } : {}),
         },
+        ...(!isInvoiceCheckout && savePaymentMethod
+          ? { setup_future_usage: "off_session" }
+          : {}),
       },
     };
 
-    // Add customer if provided
-    if (body.customerId) {
+    // Invoice payments: Stripe-hosted "save payment method" checkbox (consent on Checkout).
+    // See https://docs.stripe.com/payments/checkout/save-during-payment
+    if (isInvoiceCheckout) {
+      sessionParams.saved_payment_method_options = {
+        payment_method_save: "enabled",
+      };
+    }
+
+    // Customer / email: invoice Checkout requires a Customer object for payment_method_save.
+    if (isInvoiceCheckout) {
+      if (body.customerId) {
+        sessionParams.customer = body.customerId;
+      } else {
+        if (!body.customerEmail) {
+          throw new Error(
+            "customerEmail or customerId is required for invoice payment checkout",
+          );
+        }
+        sessionParams.customer_email = body.customerEmail;
+        sessionParams.customer_creation = "always";
+      }
+    } else if (savePaymentMethod) {
+      if (body.customerId) {
+        sessionParams.customer = body.customerId;
+      } else {
+        if (!body.customerEmail) {
+          throw new Error(
+            "customerEmail or customerId is required when savePaymentMethod is true",
+          );
+        }
+        sessionParams.customer_email = body.customerEmail;
+        sessionParams.customer_creation = "always";
+      }
+    } else if (body.customerId) {
       sessionParams.customer = body.customerId;
     } else if (body.customerEmail) {
       sessionParams.customer_email = body.customerEmail;
@@ -333,12 +391,11 @@ serve(async (req) => {
       stripeAccount: stripeAccountId,
     });
 
-    console.log("Created checkout session:", {
+    console.log("[stripe-create-checkout] session created → redirect client to Stripe", {
       sessionId: session.id,
       connectedAccountId: stripeAccountId,
       totalAmount,
       applicationFeeAmount,
-      url: session.url,
     });
 
     // Persist the new session_id on the invoice immediately so any subsequent

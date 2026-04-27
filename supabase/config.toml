@@ -12,6 +12,9 @@ otp_expiry = 86400
 [functions.stripe-webhook]
 verify_jwt = false
 
+[functions.stripe-charge-saved-invoice]
+verify_jwt = true
+
 [functions.revenuecat-webhook]
 verify_jwt = false
 
@@ -108,6 +111,8 @@ verify_jwt = false
 [functions.send-verification-email]
 verify_jwt = false
 
+[functions.send-signup-welcome]
+verify_jwt = true
 [functions.notify-internal-registration]
 verify_jwt = false
 
@@ -148,4 +153,16 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.validate-client-portal-magic-link]
+verify_jwt = false
+
+[functions.client-wallet-get]
+verify_jwt = false
+
+[functions.client-wallet-setup-checkout]
+verify_jwt = false
+
+[functions.client-wallet-issue-token]
+verify_jwt = true
+
+[functions.public-invoice-payment-profile]
 verify_jwt = false
