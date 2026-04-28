@@ -15,6 +15,9 @@ verify_jwt = false
 [functions.stripe-charge-saved-invoice]
 verify_jwt = true
 
+[functions.stripe-client-card-setup]
+verify_jwt = true
+
 [functions.revenuecat-webhook]
 verify_jwt = false
 
