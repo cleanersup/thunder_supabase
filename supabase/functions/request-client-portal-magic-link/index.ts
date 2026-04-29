@@ -176,10 +176,10 @@ serve(async (req: Request) => {
       });
     }
 
-    const portalBase = (Deno.env.get("CLIENT_PORTAL_URL") || "").replace(
+    const portalBase = (Deno.env.get("CLIENT_DASHBOARD__URL") || "").replace(
       /\/$/,
       "",
-    ) || "https://portal.thunderpro.co";
+    ) || "https://client.staging.thunderpro.co";
     const redirectTo = "/invoices";
 
     const plainToken = crypto.randomUUID() + crypto.randomUUID().replace(
