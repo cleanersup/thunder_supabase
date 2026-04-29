@@ -1,5 +1,14 @@
 #DEPLOY SUPABASE NEW PROJECT FOLDER
-scp -r /Users/carloszavala/Desktop/programacion/thunderpro/thunder_supabase/supabase thunderpro.co:/home/admin/thunder_supabase
+scp -r /Users/carloszavala/Desktop/programacion/thunderpro/thunder_supabase/supabase staging.thunderpro.co:/home/admin/thunder_supabase
+
+#DEPLOY CLIENT DASHBOARD
+scp -r dist/* staging.thunderpro.co:/var/www/client_payments_dashboard/dist
+
+#DEPLOY SWIFT SLATE FOR MOBILE
+scp -r dist/* staging.thunderpro.co:/home/admin/swift-slate/dist
+
+#DEPLOY THUNDER DASHBOARD
+scp -r dist/* staging.thunderpro.co:/var/www/thunder_dashboard/
 
 
 #CONNECT TO DB

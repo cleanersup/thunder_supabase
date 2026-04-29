@@ -258,7 +258,7 @@ serve(async (req) => {
         const pmLabel = pmRaw.length > 0
           ? pmRaw.charAt(0).toUpperCase() + pmRaw.slice(1)
           : "Payment";
-        const clientPortalBase = (Deno.env.get("CLIENT_PORTAL_URL") || "https://portal.thunderpro.co").replace(/\/$/, "");
+        const clientPortalBase = (Deno.env.get("CLIENT_DASHBOARD__URL") || "https://client.staging.thunderpro.co").replace(/\/$/, "");
         const clientPortalLoginUrl = `${clientPortalBase}/login?owner=${encodeURIComponent(invoice.user_id)}`;
 
         const clientPaidHtml = `<!DOCTYPE html>
