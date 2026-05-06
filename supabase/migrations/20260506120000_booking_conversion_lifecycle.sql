@@ -1,6 +1,8 @@
 -- Booking lifecycle: status constraint, FK to estimates/walkthroughs, RPCs, status-change emails via pg_net.
 
 CREATE EXTENSION IF NOT EXISTS pg_net;
+
+ALTER TABLE public.bookings
   DROP CONSTRAINT IF EXISTS bookings_status_check;
 
 ALTER TABLE public.bookings
