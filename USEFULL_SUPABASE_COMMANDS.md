@@ -1,7 +1,10 @@
 #DEPLOY SUPABASE NEW PROJECT FOLDER
 scp -r /Users/carloszavala/Desktop/programacion/thunderpro/thunder_supabase/supabase staging.thunderpro.co:/home/admin/thunder_supabase
 
-#DEPLOY CLIENT DASHBOARD
+#DEPLOY CLIENT DASHBOARD STAGING
+scp -r dist/* staging.thunderpro.co:/var/www/client_payments_dashboard/dist
+
+#DEPLOY CLIENT DASHBOARD PRODUCTION
 scp -r dist/* staging.thunderpro.co:/var/www/client_payments_dashboard/dist
 
 #DEPLOY SWIFT SLATE FOR MOBILE
@@ -10,6 +13,8 @@ scp -r dist/* staging.thunderpro.co:/home/admin/swift-slate/dist
 #DEPLOY THUNDER DASHBOARD
 scp -r dist/* staging.thunderpro.co:/var/www/thunder_dashboard/
 
+#DEPLOY THUNDER DASHBOARD PROD
+scp -r dist/* thunderpro.co:/var/www/thunder_dashboard/
 
 #CONNECT TO DB
 docker exec -it supabase_db_euydrdzayvjahstvmwoj psql -U postgres -d postgres

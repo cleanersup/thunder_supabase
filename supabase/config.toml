@@ -93,6 +93,9 @@ verify_jwt = false
 [functions.send-booking-emails]
 verify_jwt = false
 
+[functions.send-booking-status-emails]
+verify_jwt = false
+
 [functions.send-appointment-reminders]
 verify_jwt = false
 
