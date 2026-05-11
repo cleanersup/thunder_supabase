@@ -24,6 +24,9 @@ verify_jwt = false
 [functions.send-walkthrough-cancellation]
 verify_jwt = false
 
+[functions.send-walkthrough-cancellation-sms]
+verify_jwt = false
+
 [functions.send-cancellation-samples]
 verify_jwt = false
 
@@ -141,6 +144,18 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.send-walkthrough-confirmation]
+verify_jwt = false
+
+[functions.send-walkthrough-status-emails]
+verify_jwt = false
+
+[functions.send-walkthrough-converted]
+verify_jwt = false
+
+[functions.send-walkthrough-completion]
+verify_jwt = false
+
+[functions.send-walkthrough-completion-sms]
 verify_jwt = false
 
 [functions.send-walkthrough-reminders]

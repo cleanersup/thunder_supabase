@@ -434,12 +434,8 @@ const handler = async (req: Request): Promise<Response> => {
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const token = authHeader.replace('Bearer ', '');
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-
-    if (authError || !user) {
-      throw new Error('Unauthorized');
-    }
+    const token = authHeader.replace('Bearer ', '').trim();
+    const isServiceCall = token === supabaseServiceKey;
 
     const { walkthroughId }: WalkthroughCompletionRequest = await req.json();
 
@@ -453,11 +449,22 @@ const handler = async (req: Request): Promise<Response> => {
       .from('walkthroughs')
       .select('*')
       .eq('id', walkthroughId)
-      .eq('user_id', user.id)
-      .single();
+      .maybeSingle();
 
     if (walkthroughError || !walkthrough) {
       throw new Error('Walkthrough not found');
+    }
+
+    let sessionUserEmail: string | undefined;
+    if (!isServiceCall) {
+      const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+      if (authError || !user) {
+        throw new Error('Unauthorized');
+      }
+      if (walkthrough.user_id !== user.id) {
+        throw new Error('Walkthrough not found');
+      }
+      sessionUserEmail = user.email ?? undefined;
     }
 
     let contactInfo: any = null;
@@ -515,7 +522,7 @@ const handler = async (req: Request): Promise<Response> => {
     const { data: companyInfo } = await supabase
       .from('profiles')
       .select('company_name, company_phone, company_email, timezone')
-      .eq('user_id', user.id)
+      .eq('user_id', walkthrough.user_id)
       .single();
 
     const userTimezone = companyInfo?.timezone || 'UTC';
@@ -533,11 +540,15 @@ const handler = async (req: Request): Promise<Response> => {
     let clientEmailSent = false;
 
     // Owner email
-    const ownerEmail = companyInfo?.company_email || user.email || '';
+    let ownerEmail = companyInfo?.company_email || sessionUserEmail || '';
+    if (!ownerEmail) {
+      const { data: authRow } = await supabase.auth.admin.getUserById(walkthrough.user_id);
+      ownerEmail = authRow?.user?.email || '';
+    }
     console.log('=== OWNER EMAIL ===');
     console.log('Owner email address:', ownerEmail);
     console.log('Owner email from company_email:', companyInfo?.company_email);
-    console.log('Owner email from user.email:', user.email);
+    console.log('Owner email from session/admin:', sessionUserEmail || '(service or admin lookup)');
     
     if (!ownerEmail) {
       console.error('❌ No owner email address found');

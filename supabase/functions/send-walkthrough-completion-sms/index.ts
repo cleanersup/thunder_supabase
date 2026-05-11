@@ -48,35 +48,40 @@ serve(async (req) => {
                 throw new Error('Missing required field: walkthroughId');
             }
 
-            // Get Authorization header to create authenticated Supabase client
             const authHeader = req.headers.get('Authorization');
             if (!authHeader) {
                 throw new Error('No authorization header');
             }
 
-            const token = authHeader.replace('Bearer ', '');
+            const token = authHeader.replace('Bearer ', '').trim();
+            const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
             const supabaseClient = createClient(
                 Deno.env.get('SUPABASE_URL') ?? '',
-                Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+                serviceKey
             );
 
-            // Get the authenticated user
-            const { data: { user }, error: authError } = await supabaseClient.auth.getUser(token);
-            if (authError || !user?.id) {
-                throw new Error('User not authenticated');
-            }
-
-            console.log('✓ User authenticated:', user.id);
-
-            // Fetch walkthrough details
             const { data: walkthrough, error: walkthroughError } = await supabaseClient
                 .from('walkthroughs')
                 .select('*')
                 .eq('id', walkthroughId)
-                .single();
+                .maybeSingle();
 
             if (walkthroughError || !walkthrough) {
                 throw new Error('Walkthrough not found');
+            }
+
+            const isServiceCall = token === serviceKey;
+            if (!isServiceCall) {
+                const { data: { user }, error: authError } = await supabaseClient.auth.getUser(token);
+                if (authError || !user?.id) {
+                    throw new Error('User not authenticated');
+                }
+                if (walkthrough.user_id !== user.id) {
+                    throw new Error('Walkthrough not found');
+                }
+                console.log('✓ User authenticated:', user.id);
+            } else {
+                console.log('✓ Internal service call (send-walkthrough-status-emails)');
             }
 
             console.log('✓ Walkthrough loaded');
@@ -143,7 +148,7 @@ serve(async (req) => {
             const { data: companyInfo, error: companyError } = await supabaseClient
                 .from('profiles')
                 .select('company_name, company_phone, timezone')
-                .eq('user_id', user.id)
+                .eq('user_id', walkthrough.user_id)
                 .single();
 
             if (companyError) {

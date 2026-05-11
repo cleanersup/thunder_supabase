@@ -252,6 +252,12 @@ npx cap sync ios
 npx cap open ios
 npx cap run ios
 
+
+#MIGRATIONS TO RUN FOR THE NEW FLOW WITH JOBS AND REQUESTS
+docker exec -i supabase_db_euydrdzayvjahstvmwoj psql -U postgres -d postgres < supabase/migrations/supabase/migrations/20260506120000_booking_conversion_lifecycle.sql
+
+
+
 #Phone
 iPhone 17 Pro Max (simulator) (00360C5F-8C56-4CC9-836E-4E73D52BDA64)
 
