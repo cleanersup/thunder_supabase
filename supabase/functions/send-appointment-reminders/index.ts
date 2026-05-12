@@ -366,7 +366,7 @@ const handler = async (req: Request): Promise<Response> => {
       .from('route_appointments')
       .select('*, clients(*)')
       .in('scheduled_date', [todayDate, tomorrowDate])
-      .eq('status', 'scheduled');
+      .in('status', ['scheduled', 'upcoming', 'today']);
 
     if (error) {
       console.error('Error fetching appointments:', error);

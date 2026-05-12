@@ -308,7 +308,7 @@ const handler = async (req: Request): Promise<Response> => {
       .from('route_appointments')
       .select('*, clients(*)')
       .eq('scheduled_date', todayDate)
-      .eq('status', 'scheduled')
+      .in('status', ['scheduled', 'upcoming', 'today'])
       .eq('email_sent', false)
       .not('recurring_frequency', 'is', null); // Only recurring appointments (recurring_frequency is not null)
 
