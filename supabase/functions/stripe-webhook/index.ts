@@ -12,6 +12,25 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, stripe-signature",
 };
 
+function pickInvoiceId(metadata?: Record<string, unknown> | null): string | null {
+  if (!metadata) return null;
+  const raw =
+    metadata.invoice_id ??
+    metadata.invoiceId ??
+    metadata["invoice-id"] ??
+    metadata["invoice_id".toUpperCase()];
+
+  if (typeof raw === "string") {
+    const normalized = raw.trim();
+    return normalized.length > 0 ? normalized : null;
+  }
+  if (raw != null) {
+    const normalized = String(raw).trim();
+    return normalized.length > 0 ? normalized : null;
+  }
+  return null;
+}
+
 serve(async (req: Request) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
@@ -252,37 +271,131 @@ serve(async (req: Request) => {
 
         console.log("[stripe-webhook] payment snapshot (before DB writes):", paymentData);
 
-        // Extract metadata
-        const invoiceIdRaw = session.metadata?.invoice_id;
-        const invoiceId =
-          typeof invoiceIdRaw === "string"
-            ? invoiceIdRaw.trim()
-            : invoiceIdRaw != null
-              ? String(invoiceIdRaw)
-              : undefined;
+        // Extract metadata (support alternate key shapes).
+        let invoiceId = pickInvoiceId(session.metadata as Record<string, unknown> | null);
+        const invoiceIdFromSessionMetadata = invoiceId;
         const merchantUserIdFromMetadata = session.metadata?.merchant_user_id;
 
-        // Store payment data in database
-        const { error: paymentError } = await supabase.from("payments").insert({
-          user_id: merchantUserId || merchantUserIdFromMetadata,
-          invoice_id: invoiceId,
-          amount: session.amount_total! / 100, // Convert cents to major currency
-          currency: session.currency || "usd",
-          status: session.payment_status === "paid" ? "succeeded" : "failed",
-          stripe_payment_intent_id: paymentIntent?.id ?? paymentIntentId ?? null,
-          stripe_session_id: session.id,
-          payment_method: session.payment_method_types?.[0],
-          metadata: session.metadata,
+        // Fallback 1: payment_intent metadata
+        if (!invoiceId) {
+          invoiceId = pickInvoiceId((paymentIntent?.metadata ?? null) as Record<string, unknown> | null);
+          if (invoiceId) {
+            console.log("[stripe-webhook] invoice id recovered from payment_intent metadata", {
+              invoiceId,
+              payment_intent_id: paymentIntent?.id ?? paymentIntentId ?? null,
+            });
+          }
+        }
+
+        // Fallback 2: find invoice by stored stripe_session_id
+        if (!invoiceId) {
+          const { data: invBySession, error: invBySessionError } = await supabase
+            .from("invoices")
+            .select("id, status, invoice_number")
+            .eq("stripe_session_id", session.id)
+            .maybeSingle();
+
+          if (invBySessionError) {
+            console.error("[stripe-webhook] invoice lookup by stripe_session_id failed:", invBySessionError);
+          } else if (invBySession?.id) {
+            invoiceId = invBySession.id;
+            console.log("[stripe-webhook] invoice id recovered by stripe_session_id", {
+              invoiceId,
+              stripe_session_id: session.id,
+              invoice_status: invBySession.status,
+              invoice_number: invBySession.invoice_number,
+            });
+          }
+        }
+
+        // Fallback 3: find invoice by payment intent id
+        if (!invoiceId && (paymentIntent?.id ?? paymentIntentId)) {
+          const lookupPaymentIntentId = paymentIntent?.id ?? paymentIntentId!;
+          const { data: invByPi, error: invByPiError } = await supabase
+            .from("invoices")
+            .select("id, status, invoice_number")
+            .eq("stripe_payment_intent_id", lookupPaymentIntentId)
+            .maybeSingle();
+
+          if (invByPiError) {
+            console.error("[stripe-webhook] invoice lookup by stripe_payment_intent_id failed:", invByPiError);
+          } else if (invByPi?.id) {
+            invoiceId = invByPi.id;
+            console.log("[stripe-webhook] invoice id recovered by stripe_payment_intent_id", {
+              invoiceId,
+              stripe_payment_intent_id: lookupPaymentIntentId,
+              invoice_status: invByPi.status,
+              invoice_number: invByPi.invoice_number,
+            });
+          }
+        }
+
+        console.log("[stripe-webhook] invoice id resolution summary", {
+          session_id: session.id,
+          payment_intent_id: paymentIntent?.id ?? paymentIntentId ?? null,
+          invoice_id_from_session_metadata: invoiceIdFromSessionMetadata,
+          invoice_id_final: invoiceId ?? null,
+          session_payment_status: session.payment_status,
+          session_metadata: session.metadata ?? null,
+          payment_intent_metadata: paymentIntent?.metadata ?? null,
         });
 
-        if (paymentError) {
-          console.error("[stripe-webhook] payments INSERT failed:", paymentError);
+        // Store payment data in database
+        if (invoiceId && (merchantUserId || merchantUserIdFromMetadata)) {
+          const { data: existingPayment, error: existingPaymentError } = await supabase
+            .from("payments")
+            .select("id")
+            .eq("stripe_session_id", session.id)
+            .limit(1)
+            .maybeSingle();
+
+          if (existingPaymentError) {
+            console.error("[stripe-webhook] payments lookup by stripe_session_id failed:", existingPaymentError);
+          }
+
+          if (existingPayment?.id) {
+            console.log("[stripe-webhook] payments row already exists for session, skipping insert", {
+              stripe_session_id: session.id,
+              payment_row_id: existingPayment.id,
+            });
+          } else {
+            const { error: paymentError } = await supabase.from("payments").insert({
+              user_id: merchantUserId || merchantUserIdFromMetadata,
+              invoice_id: invoiceId,
+              amount: session.amount_total! / 100, // Convert cents to major currency
+              currency: session.currency || "usd",
+              status: session.payment_status === "paid" ? "succeeded" : "failed",
+              stripe_payment_intent_id: paymentIntent?.id ?? paymentIntentId ?? null,
+              stripe_session_id: session.id,
+              payment_method: session.payment_method_types?.[0],
+              metadata: session.metadata,
+            });
+
+            if (paymentError) {
+              console.error("[stripe-webhook] payments INSERT failed:", paymentError);
+            } else {
+              console.log("[stripe-webhook] payments INSERT ok", { invoice_id: invoiceId ?? null });
+            }
+          }
         } else {
-          console.log("[stripe-webhook] payments INSERT ok", { invoice_id: invoiceId ?? null });
+          console.warn("[stripe-webhook] payments INSERT skipped (missing invoiceId or merchant user)", {
+            invoice_id: invoiceId ?? null,
+            merchant_user_id: merchantUserId || merchantUserIdFromMetadata || null,
+            session_id: session.id,
+          });
         }
 
         // Update invoice status if invoice_id exists in metadata
         if (invoiceId) {
+          if (session.payment_status !== "paid") {
+            console.warn("[stripe-webhook] checkout.session.completed but payment_status is not paid; skipping invoice status update", {
+              invoiceId,
+              session_id: session.id,
+              payment_status: session.payment_status,
+            });
+            break;
+          }
+
           const { data: invoice, error: invoiceError } = await supabase
             .from("invoices")
             .update({
@@ -299,6 +412,18 @@ serve(async (req: Request) => {
 
           if (invoiceError) {
             console.error("[stripe-webhook] invoice UPDATE failed:", invoiceError);
+            const { data: invoiceSnapshot, error: invoiceSnapshotError } = await supabase
+              .from("invoices")
+              .select("id, status, stripe_session_id, stripe_payment_intent_id")
+              .eq("id", invoiceId)
+              .maybeSingle();
+            console.error("[stripe-webhook] invoice snapshot after failed update", {
+              invoice_id: invoiceId,
+              snapshot_error: invoiceSnapshotError ?? null,
+              snapshot: invoiceSnapshot ?? null,
+              session_id: session.id,
+              payment_intent_id: paymentIntent?.id ?? paymentIntentId ?? null,
+            });
           } else {
             console.log("[stripe-webhook] invoice UPDATE → Paid", {
               invoiceId,
@@ -357,6 +482,14 @@ serve(async (req: Request) => {
               console.error("Error in notification/activity logic:", notifyErr);
             }
           }
+        } else {
+          console.error("[stripe-webhook] invoice UPDATE skipped: unable to resolve invoice id from event", {
+            event_id: event.id,
+            session_id: session.id,
+            payment_intent_id: paymentIntent?.id ?? paymentIntentId ?? null,
+            session_metadata: session.metadata ?? null,
+            payment_intent_metadata: paymentIntent?.metadata ?? null,
+          });
         }
 
         // Persist saved card on CRM client (never block paid flow).
@@ -574,9 +707,67 @@ serve(async (req: Request) => {
 
       case "payment_intent.succeeded": {
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        console.log("Payment intent succeeded:", paymentIntent.id);
+        const metadata = paymentIntent.metadata as Record<string, unknown> | undefined;
+        let invoiceId = pickInvoiceId(metadata ?? null);
+        console.log("[stripe-webhook] payment_intent.succeeded", {
+          payment_intent_id: paymentIntent.id,
+          amount_received: paymentIntent.amount_received,
+          currency: paymentIntent.currency,
+          status: paymentIntent.status,
+          invoice_id_from_metadata: invoiceId ?? null,
+          metadata: metadata ?? null,
+        });
 
-        // Additional handling if needed
+        // Fallback by PI id if metadata is missing/incorrect.
+        if (!invoiceId) {
+          const { data: invByPi, error: invByPiError } = await supabase
+            .from("invoices")
+            .select("id, status, invoice_number")
+            .eq("stripe_payment_intent_id", paymentIntent.id)
+            .maybeSingle();
+          if (invByPiError) {
+            console.error("[stripe-webhook] payment_intent.succeeded invoice lookup by PI failed:", invByPiError);
+          } else if (invByPi?.id) {
+            invoiceId = invByPi.id;
+            console.log("[stripe-webhook] payment_intent.succeeded invoice recovered by PI id", {
+              invoice_id: invoiceId,
+              invoice_status: invByPi.status,
+              invoice_number: invByPi.invoice_number,
+            });
+          }
+        }
+
+        if (!invoiceId) {
+          console.warn("[stripe-webhook] payment_intent.succeeded skipped invoice update: no invoice id");
+          break;
+        }
+
+        const paidAtIso = new Date().toISOString();
+        const { data: invoice, error: invoiceError } = await supabase
+          .from("invoices")
+          .update({
+            status: "Paid",
+            paid_at: paidAtIso,
+            paid_date: paidAtIso.split("T")[0],
+            stripe_payment_intent_id: paymentIntent.id,
+            payment_method:
+              (typeof paymentIntent.payment_method === "string" && paymentIntent.payment_method) ||
+              "stripe",
+          })
+          .eq("id", invoiceId)
+          .select("id, invoice_number, status")
+          .single();
+
+        if (invoiceError) {
+          console.error("[stripe-webhook] payment_intent.succeeded invoice update failed:", invoiceError);
+        } else {
+          console.log("[stripe-webhook] payment_intent.succeeded invoice marked Paid", {
+            invoice_id: invoice.id,
+            invoice_number: invoice.invoice_number,
+            status: invoice.status,
+            payment_intent_id: paymentIntent.id,
+          });
+        }
         break;
       }
 
