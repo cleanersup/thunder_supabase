@@ -31,6 +31,54 @@ function pickInvoiceId(metadata?: Record<string, unknown> | null): string | null
   return null;
 }
 
+interface StripeWebhookAuditInput {
+  eventId: string;
+  eventType: string;
+  livemode: boolean;
+  stripeAccountId?: string | null;
+  merchantUserId?: string | null;
+  resolvedInvoiceId?: string | null;
+  stripePaymentIntentId?: string | null;
+  stripeSessionId?: string | null;
+  finalAction: string;
+  ok: boolean;
+  errorMessage?: string | null;
+  payloadExcerpt?: Record<string, unknown>;
+}
+
+async function upsertStripeWebhookAudit(
+  supabase: ReturnType<typeof createClient>,
+  input: StripeWebhookAuditInput,
+): Promise<void> {
+  const row = {
+    event_id: input.eventId,
+    event_type: input.eventType,
+    livemode: input.livemode,
+    stripe_account_id: input.stripeAccountId ?? null,
+    merchant_user_id: input.merchantUserId ?? null,
+    resolved_invoice_id: input.resolvedInvoiceId ?? null,
+    stripe_payment_intent_id: input.stripePaymentIntentId ?? null,
+    stripe_session_id: input.stripeSessionId ?? null,
+    final_action: input.finalAction,
+    ok: input.ok,
+    error_message: input.errorMessage ?? null,
+    payload_excerpt: input.payloadExcerpt ?? {},
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase
+    .from("stripe_webhook_audit")
+    .upsert(row, { onConflict: "event_id" });
+
+  if (error) {
+    console.error("[stripe-webhook] stripe_webhook_audit upsert failed:", {
+      event_id: input.eventId,
+      final_action: input.finalAction,
+      error,
+    });
+  }
+}
+
 serve(async (req: Request) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
@@ -48,6 +96,9 @@ serve(async (req: Request) => {
   }
 
   console.log("[stripe-webhook] ←", req.method, "at", new Date().toISOString());
+
+  let supabase: ReturnType<typeof createClient> | null = null;
+  let parsedEvent: Stripe.Event | null = null;
 
   try {
     // Initialize Stripe
@@ -69,7 +120,7 @@ serve(async (req: Request) => {
     // Initialize Supabase client
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     // Get the raw body for signature verification
     const body = await req.text();
@@ -83,6 +134,7 @@ serve(async (req: Request) => {
     let event: Stripe.Event;
     try {
       event = await stripe.webhooks.constructEventAsync(body, signature, webhookSecret);
+      parsedEvent = event;
       console.log(
         "[stripe-webhook] signature OK →",
         `type=${event.type}`,
@@ -101,6 +153,19 @@ serve(async (req: Request) => {
         }
       );
     }
+
+    await upsertStripeWebhookAudit(supabase, {
+      eventId: event.id,
+      eventType: event.type,
+      livemode: event.livemode,
+      stripeAccountId: (event as Stripe.Event & { account?: string }).account ?? null,
+      finalAction: "received",
+      ok: false,
+      payloadExcerpt: {
+        created: event.created,
+        pending_webhooks: event.pending_webhooks,
+      },
+    });
 
     // Handle different event types
     switch (event.type) {
@@ -206,11 +271,30 @@ serve(async (req: Request) => {
           } catch (walletErr) {
             console.error("Wallet setup handler error:", walletErr);
           }
+          await upsertStripeWebhookAudit(supabase, {
+            eventId: event.id,
+            eventType: event.type,
+            livemode: event.livemode,
+            stripeAccountId: connectedAccountId ?? null,
+            stripeSessionId: session.id,
+            finalAction: "wallet_setup_processed",
+            ok: true,
+          });
           break;
         }
 
         if (session.mode !== "payment") {
           console.log("[stripe-webhook] skip: session.mode is not payment:", session.mode);
+          await upsertStripeWebhookAudit(supabase, {
+            eventId: event.id,
+            eventType: event.type,
+            livemode: event.livemode,
+            stripeAccountId: connectedAccountId ?? null,
+            stripeSessionId: session.id,
+            finalAction: "skip_non_payment_mode",
+            ok: true,
+            payloadExcerpt: { mode: session.mode },
+          });
           break;
         }
 
@@ -340,6 +424,23 @@ serve(async (req: Request) => {
           payment_intent_metadata: paymentIntent?.metadata ?? null,
         });
 
+        await upsertStripeWebhookAudit(supabase, {
+          eventId: event.id,
+          eventType: event.type,
+          livemode: event.livemode,
+          stripeAccountId: connectedAccountId ?? null,
+          merchantUserId: (merchantUserId || merchantUserIdFromMetadata) ?? null,
+          resolvedInvoiceId: invoiceId ?? null,
+          stripePaymentIntentId: paymentIntent?.id ?? paymentIntentId ?? null,
+          stripeSessionId: session.id,
+          finalAction: invoiceId ? "invoice_resolved" : "invoice_unresolved",
+          ok: Boolean(invoiceId),
+          payloadExcerpt: {
+            payment_status: session.payment_status,
+            invoice_id_from_metadata: invoiceIdFromSessionMetadata,
+          },
+        });
+
         // Store payment data in database
         if (invoiceId && (merchantUserId || merchantUserIdFromMetadata)) {
           const { data: existingPayment, error: existingPaymentError } = await supabase
@@ -393,6 +494,19 @@ serve(async (req: Request) => {
               session_id: session.id,
               payment_status: session.payment_status,
             });
+            await upsertStripeWebhookAudit(supabase, {
+              eventId: event.id,
+              eventType: event.type,
+              livemode: event.livemode,
+              stripeAccountId: connectedAccountId ?? null,
+              merchantUserId: (merchantUserId || merchantUserIdFromMetadata) ?? null,
+              resolvedInvoiceId: invoiceId,
+              stripePaymentIntentId: paymentIntent?.id ?? paymentIntentId ?? null,
+              stripeSessionId: session.id,
+              finalAction: "skip_payment_status_not_paid",
+              ok: false,
+              payloadExcerpt: { payment_status: session.payment_status },
+            });
             break;
           }
 
@@ -424,12 +538,40 @@ serve(async (req: Request) => {
               session_id: session.id,
               payment_intent_id: paymentIntent?.id ?? paymentIntentId ?? null,
             });
+            await upsertStripeWebhookAudit(supabase, {
+              eventId: event.id,
+              eventType: event.type,
+              livemode: event.livemode,
+              stripeAccountId: connectedAccountId ?? null,
+              merchantUserId: (merchantUserId || merchantUserIdFromMetadata) ?? null,
+              resolvedInvoiceId: invoiceId,
+              stripePaymentIntentId: paymentIntent?.id ?? paymentIntentId ?? null,
+              stripeSessionId: session.id,
+              finalAction: "invoice_update_failed",
+              ok: false,
+              errorMessage:
+                invoiceError.message ??
+                "invoice update failed",
+            });
           } else {
             console.log("[stripe-webhook] invoice UPDATE → Paid", {
               invoiceId,
               invoiceNumber: invoice.invoice_number,
               clientName: invoice.client_name,
               total: invoice.total,
+            });
+
+            await upsertStripeWebhookAudit(supabase, {
+              eventId: event.id,
+              eventType: event.type,
+              livemode: event.livemode,
+              stripeAccountId: connectedAccountId ?? null,
+              merchantUserId: (merchantUserId || merchantUserIdFromMetadata) ?? null,
+              resolvedInvoiceId: invoiceId,
+              stripePaymentIntentId: paymentIntent?.id ?? paymentIntentId ?? null,
+              stripeSessionId: session.id,
+              finalAction: "invoice_marked_paid",
+              ok: true,
             });
 
             try {
@@ -489,6 +631,19 @@ serve(async (req: Request) => {
             payment_intent_id: paymentIntent?.id ?? paymentIntentId ?? null,
             session_metadata: session.metadata ?? null,
             payment_intent_metadata: paymentIntent?.metadata ?? null,
+          });
+          await upsertStripeWebhookAudit(supabase, {
+            eventId: event.id,
+            eventType: event.type,
+            livemode: event.livemode,
+            stripeAccountId: connectedAccountId ?? null,
+            merchantUserId: (merchantUserId || merchantUserIdFromMetadata) ?? null,
+            resolvedInvoiceId: null,
+            stripePaymentIntentId: paymentIntent?.id ?? paymentIntentId ?? null,
+            stripeSessionId: session.id,
+            finalAction: "skip_no_invoice_match",
+            ok: false,
+            errorMessage: "Unable to resolve invoice id from webhook payload/session/payment-intent lookups",
           });
         }
 
@@ -718,6 +873,19 @@ serve(async (req: Request) => {
           metadata: metadata ?? null,
         });
 
+        await upsertStripeWebhookAudit(supabase, {
+          eventId: event.id,
+          eventType: event.type,
+          livemode: event.livemode,
+          stripeAccountId: (event as Stripe.Event & { account?: string }).account ?? null,
+          merchantUserId:
+            (typeof metadata?.merchant_user_id === "string" && metadata.merchant_user_id) || null,
+          resolvedInvoiceId: invoiceId ?? null,
+          stripePaymentIntentId: paymentIntent.id,
+          finalAction: invoiceId ? "pi_invoice_resolved" : "pi_invoice_unresolved",
+          ok: Boolean(invoiceId),
+        });
+
         // Fallback by PI id if metadata is missing/incorrect.
         if (!invoiceId) {
           const { data: invByPi, error: invByPiError } = await supabase
@@ -739,6 +907,16 @@ serve(async (req: Request) => {
 
         if (!invoiceId) {
           console.warn("[stripe-webhook] payment_intent.succeeded skipped invoice update: no invoice id");
+          await upsertStripeWebhookAudit(supabase, {
+            eventId: event.id,
+            eventType: event.type,
+            livemode: event.livemode,
+            stripeAccountId: (event as Stripe.Event & { account?: string }).account ?? null,
+            stripePaymentIntentId: paymentIntent.id,
+            finalAction: "pi_skip_no_invoice_match",
+            ok: false,
+            errorMessage: "No invoice id in metadata and no invoice matched by stripe_payment_intent_id",
+          });
           break;
         }
 
@@ -760,12 +938,37 @@ serve(async (req: Request) => {
 
         if (invoiceError) {
           console.error("[stripe-webhook] payment_intent.succeeded invoice update failed:", invoiceError);
+          await upsertStripeWebhookAudit(supabase, {
+            eventId: event.id,
+            eventType: event.type,
+            livemode: event.livemode,
+            stripeAccountId: (event as Stripe.Event & { account?: string }).account ?? null,
+            merchantUserId:
+              (typeof metadata?.merchant_user_id === "string" && metadata.merchant_user_id) || null,
+            resolvedInvoiceId: invoiceId,
+            stripePaymentIntentId: paymentIntent.id,
+            finalAction: "pi_invoice_update_failed",
+            ok: false,
+            errorMessage: invoiceError.message ?? "payment_intent invoice update failed",
+          });
         } else {
           console.log("[stripe-webhook] payment_intent.succeeded invoice marked Paid", {
             invoice_id: invoice.id,
             invoice_number: invoice.invoice_number,
             status: invoice.status,
             payment_intent_id: paymentIntent.id,
+          });
+          await upsertStripeWebhookAudit(supabase, {
+            eventId: event.id,
+            eventType: event.type,
+            livemode: event.livemode,
+            stripeAccountId: (event as Stripe.Event & { account?: string }).account ?? null,
+            merchantUserId:
+              (typeof metadata?.merchant_user_id === "string" && metadata.merchant_user_id) || null,
+            resolvedInvoiceId: invoiceId,
+            stripePaymentIntentId: paymentIntent.id,
+            finalAction: "pi_invoice_marked_paid",
+            ok: true,
           });
         }
         break;
@@ -817,6 +1020,14 @@ serve(async (req: Request) => {
 
       default:
         console.log("[stripe-webhook] unhandled event type (200 OK):", event.type);
+        await upsertStripeWebhookAudit(supabase, {
+          eventId: event.id,
+          eventType: event.type,
+          livemode: event.livemode,
+          stripeAccountId: (event as Stripe.Event & { account?: string }).account ?? null,
+          finalAction: "unhandled_event",
+          ok: true,
+        });
     }
 
     // Return success response
@@ -828,6 +1039,17 @@ serve(async (req: Request) => {
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Internal server error";
     console.error("[stripe-webhook] → 400 top-level error:", errorMessage);
+    if (supabase && parsedEvent) {
+      await upsertStripeWebhookAudit(supabase, {
+        eventId: parsedEvent.id,
+        eventType: parsedEvent.type,
+        livemode: parsedEvent.livemode,
+        stripeAccountId: (parsedEvent as Stripe.Event & { account?: string }).account ?? null,
+        finalAction: "top_level_error",
+        ok: false,
+        errorMessage,
+      });
+    }
     return new Response(
       JSON.stringify({
         error: errorMessage,
