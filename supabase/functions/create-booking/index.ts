@@ -226,6 +226,38 @@ serve(async (req) => {
       );
     }
 
+    // Explicit backend-side email dispatch after successful booking insert.
+    // This avoids relying on DB table triggers for booking creation emails.
+    try {
+      const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+      const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+      const emailPayload = {
+        bookingId: data.id,
+        previousStatus: null,
+        newStatus: data.status || status,
+        operation: 'INSERT',
+      };
+
+      console.log('[create-booking] dispatching send-booking-status-emails', emailPayload);
+      const emailRes = await fetch(`${supabaseUrl}/functions/v1/send-booking-status-emails`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${serviceRoleKey}`,
+        },
+        body: JSON.stringify(emailPayload),
+      });
+
+      const emailBody = await emailRes.text();
+      console.log('[create-booking] email dispatch response', {
+        status: emailRes.status,
+        body: emailBody,
+      });
+    } catch (emailErr) {
+      // Do not fail booking creation due to email delivery issues.
+      console.error('[create-booking] email dispatch failed', emailErr);
+    }
+
     return new Response(
       JSON.stringify(data),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
