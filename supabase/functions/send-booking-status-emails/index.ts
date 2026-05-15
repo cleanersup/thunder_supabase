@@ -21,8 +21,9 @@ type BookingRow = {
 
 interface StatusPayload {
   bookingId: string;
-  previousStatus: string;
+  previousStatus: string | null;
   newStatus: string;
+  operation?: "INSERT" | "UPDATE";
 }
 
 async function sendEmailViaSMTP(toEmail: string, subject: string, htmlContent: string): Promise<void> {
@@ -161,7 +162,14 @@ serve(async (req) => {
   }
 
   try {
-    const { bookingId, previousStatus, newStatus } = await req.json() as StatusPayload;
+    const { bookingId, previousStatus, newStatus, operation } = await req.json() as StatusPayload;
+    console.log("[send-booking-status-emails] incoming payload", {
+      bookingId,
+      previousStatus,
+      newStatus,
+      operation: operation ?? "unknown",
+    });
+
     if (!bookingId || !newStatus) {
       return new Response(JSON.stringify({ error: "bookingId and newStatus are required" }), {
         status: 400,
@@ -175,7 +183,7 @@ serve(async (req) => {
 
     const { data: booking, error: bErr } = await supabase.from("bookings").select("*").eq("id", bookingId).single();
     if (bErr || !booking) {
-      console.error("booking load:", bErr);
+      console.error("[send-booking-status-emails] booking load failed", bErr);
       return new Response(JSON.stringify({ error: "Booking not found" }), {
         status: 404,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -192,13 +200,19 @@ serve(async (req) => {
 
     const { data: authUser, error: authErr } = await supabase.auth.admin.getUserById(b.business_owner_id);
     if (authErr || !authUser?.user?.email) {
-      console.error("owner email:", authErr);
+      console.error("[send-booking-status-emails] owner email lookup failed", authErr);
       return new Response(JSON.stringify({ error: "Could not resolve business owner email" }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
     const ownerEmail = authUser.user.email;
+    console.log("[send-booking-status-emails] recipients resolved", {
+      ownerEmail,
+      clientEmail: b.email || null,
+      companyName,
+      status: newStatus,
+    });
 
     let conversionHint = "";
     if (newStatus === "converted") {
@@ -207,6 +221,11 @@ serve(async (req) => {
       if (est?.id) conversionHint = "an estimate";
       else if (wt?.id) conversionHint = "a walkthrough";
       else conversionHint = "the next step in our process";
+      console.log("[send-booking-status-emails] conversion target resolved", {
+        estimateId: est?.id ?? null,
+        walkthroughId: wt?.id ?? null,
+        conversionHint,
+      });
     }
 
     let leadSubject: string;
@@ -228,7 +247,7 @@ serve(async (req) => {
         ownerHtml = wrapOwner(
           "green",
           "Booking converted",
-          `<p>The booking for <strong>${b.lead_name}</strong> (${b.email}) was converted (previous status: ${previousStatus}).</p>`,
+          `<p>The booking for <strong>${b.lead_name}</strong> (${b.email}) was converted (previous status: ${previousStatus ?? "N/A"}).</p>`,
           b,
           companyName,
         );
@@ -246,7 +265,7 @@ serve(async (req) => {
         ownerHtml = wrapOwner(
           "green",
           "Booking cancelled",
-          `<p>You marked the booking for <strong>${b.lead_name}</strong> as cancelled (was: ${previousStatus}).</p>`,
+          `<p>You marked the booking for <strong>${b.lead_name}</strong> as cancelled (was: ${previousStatus ?? "N/A"}).</p>`,
           b,
           companyName,
         );
@@ -264,28 +283,47 @@ serve(async (req) => {
         ownerHtml = wrapOwner(
           "green",
           "Booking archived",
-          `<p>Booking for <strong>${b.lead_name}</strong> was archived (was: ${previousStatus}).</p>`,
+          `<p>Booking for <strong>${b.lead_name}</strong> was archived (was: ${previousStatus ?? "N/A"}).</p>`,
           b,
           companyName,
         );
         break;
       case "new":
-        leadSubject = `Booking restored — ${companyName}`;
-        ownerSubject = `Booking restored — ${b.lead_name}`;
-        leadHtml = wrapLead(
-          "indigo",
-          "Booking restored",
-          `<p>Dear ${b.lead_name},</p><p>Your booking request is active again with ${companyName}. We will be in touch as needed.</p>`,
-          b,
-          companyName,
-        );
-        ownerHtml = wrapOwner(
-          "green",
-          "Booking restored",
-          `<p>Booking for <strong>${b.lead_name}</strong> was restored to <strong>new</strong> (was: ${previousStatus}).</p>`,
-          b,
-          companyName,
-        );
+        if (operation === "INSERT" || previousStatus === null) {
+          leadSubject = `Booking Confirmation - ${companyName}`;
+          ownerSubject = `🎉 New Lead Request - ${b.lead_name}`;
+          leadHtml = wrapLead(
+            "indigo",
+            "Thank you for your booking request",
+            `<p>Dear ${b.lead_name},</p><p>We received your booking request and our team will contact you soon.</p>`,
+            b,
+            companyName,
+          );
+          ownerHtml = wrapOwner(
+            "green",
+            "New booking request",
+            `<p>A new booking request was created for <strong>${b.lead_name}</strong> (${b.email}).</p>`,
+            b,
+            companyName,
+          );
+        } else {
+          leadSubject = `Booking restored — ${companyName}`;
+          ownerSubject = `Booking restored — ${b.lead_name}`;
+          leadHtml = wrapLead(
+            "indigo",
+            "Booking restored",
+            `<p>Dear ${b.lead_name},</p><p>Your booking request is active again with ${companyName}. We will be in touch as needed.</p>`,
+            b,
+            companyName,
+          );
+          ownerHtml = wrapOwner(
+            "green",
+            "Booking restored",
+            `<p>Booking for <strong>${b.lead_name}</strong> was restored to <strong>new</strong> (was: ${previousStatus ?? "N/A"}).</p>`,
+            b,
+            companyName,
+          );
+        }
         break;
       default:
         leadSubject = `Booking update — ${companyName}`;
@@ -300,21 +338,45 @@ serve(async (req) => {
         ownerHtml = wrapOwner(
           "green",
           "Booking status changed",
-          `<p>Booking for <strong>${b.lead_name}</strong> changed from ${previousStatus} to <strong>${newStatus}</strong>.</p>`,
+          `<p>Booking for <strong>${b.lead_name}</strong> changed from ${previousStatus ?? "N/A"} to <strong>${newStatus}</strong>.</p>`,
           b,
           companyName,
         );
     }
 
-    await sendEmailViaSMTP(b.email, leadSubject, leadHtml);
-    await sendEmailViaSMTP(ownerEmail, ownerSubject, ownerHtml);
+    const shouldSendClientEmail = newStatus !== "converted";
+    console.log("[send-booking-status-emails] send plan", {
+      shouldSendOwnerEmail: true,
+      shouldSendClientEmail,
+      status: newStatus,
+      operation: operation ?? "unknown",
+    });
 
-    return new Response(JSON.stringify({ success: true }), {
+    let ownerEmailSent = false;
+    let clientEmailSent = false;
+
+    await sendEmailViaSMTP(ownerEmail, ownerSubject, ownerHtml);
+    ownerEmailSent = true;
+
+    if (shouldSendClientEmail && b.email) {
+      await sendEmailViaSMTP(b.email, leadSubject, leadHtml);
+      clientEmailSent = true;
+    }
+
+    console.log("[send-booking-status-emails] dispatch result", {
+      bookingId,
+      status: newStatus,
+      ownerEmailSent,
+      clientEmailSent,
+      operation: operation ?? "unknown",
+    });
+
+    return new Response(JSON.stringify({ success: true, ownerEmailSent, clientEmailSent }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err: unknown) {
-    console.error(err);
+    console.error("[send-booking-status-emails] unhandled error", err);
     return new Response(JSON.stringify({ error: (err as Error).message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
