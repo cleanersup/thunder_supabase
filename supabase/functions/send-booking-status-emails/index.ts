@@ -235,110 +235,110 @@ serve(async (req) => {
 
     switch (newStatus) {
       case "converted":
-        leadSubject = `Update — your booking with ${companyName}`;
-        ownerSubject = `Booking converted — ${b.lead_name}`;
+        leadSubject = `Update — your request with ${companyName}`;
+        ownerSubject = `Request converted — ${b.lead_name}`;
         leadHtml = wrapLead(
           "indigo",
-          "Booking update",
+          "Request update",
           `<p>Dear ${b.lead_name},</p><p>Your service request has been moved forward as ${conversionHint}. We will follow up with any next steps.</p>`,
           b,
           companyName,
         );
         ownerHtml = wrapOwner(
           "green",
-          "Booking converted",
-          `<p>The booking for <strong>${b.lead_name}</strong> (${b.email}) was converted (previous status: ${previousStatus ?? "N/A"}).</p>`,
+          "Request converted",
+          `<p>The request for <strong>${b.lead_name}</strong> (${b.email}) was converted (previous status: ${previousStatus ?? "N/A"}).</p>`,
           b,
           companyName,
         );
         break;
       case "cancelled":
-        leadSubject = `Booking cancelled — ${companyName}`;
-        ownerSubject = `Booking cancelled — ${b.lead_name}`;
+        leadSubject = `Request cancelled — ${companyName}`;
+        ownerSubject = `Request cancelled — ${b.lead_name}`;
         leadHtml = wrapLead(
           "indigo",
-          "Booking cancelled",
-          `<p>Dear ${b.lead_name},</p><p>Your booking request with ${companyName} has been cancelled. If you have questions, reply to this email or call us.</p>`,
+          "Request cancelled",
+          `<p>Dear ${b.lead_name},</p><p>Your request with ${companyName} has been cancelled. If you have questions, reply to this email or call us.</p>`,
           b,
           companyName,
         );
         ownerHtml = wrapOwner(
           "green",
-          "Booking cancelled",
-          `<p>You marked the booking for <strong>${b.lead_name}</strong> as cancelled (was: ${previousStatus ?? "N/A"}).</p>`,
+          "Request cancelled",
+          `<p>You marked the request for <strong>${b.lead_name}</strong> as cancelled (was: ${previousStatus ?? "N/A"}).</p>`,
           b,
           companyName,
         );
         break;
       case "archived":
-        leadSubject = `Booking archived — ${companyName}`;
-        ownerSubject = `Booking archived — ${b.lead_name}`;
+        leadSubject = `Request archived — ${companyName}`;
+        ownerSubject = `Request archived — ${b.lead_name}`;
         leadHtml = wrapLead(
           "indigo",
-          "Booking archived",
-          `<p>Dear ${b.lead_name},</p><p>Your booking request has been archived by ${companyName}. Contact us if you still need service.</p>`,
+          "Request archived",
+          `<p>Dear ${b.lead_name},</p><p>Your request has been archived by ${companyName}. Contact us if you still need service.</p>`,
           b,
           companyName,
         );
         ownerHtml = wrapOwner(
           "green",
-          "Booking archived",
-          `<p>Booking for <strong>${b.lead_name}</strong> was archived (was: ${previousStatus ?? "N/A"}).</p>`,
+          "Request archived",
+          `<p>Request for <strong>${b.lead_name}</strong> was archived (was: ${previousStatus ?? "N/A"}).</p>`,
           b,
           companyName,
         );
         break;
       case "new":
         if (operation === "INSERT" || previousStatus === null) {
-          leadSubject = `Booking Confirmation - ${companyName}`;
-          ownerSubject = `🎉 New Lead Request - ${b.lead_name}`;
+          leadSubject = `Request Confirmation - ${companyName}`;
+          ownerSubject = `🎉 New Request - ${b.lead_name}`;
           leadHtml = wrapLead(
             "indigo",
-            "Thank you for your booking request",
-            `<p>Dear ${b.lead_name},</p><p>We received your booking request and our team will contact you soon.</p>`,
+            "Thank you for your request",
+            `<p>Dear ${b.lead_name},</p><p>We received your request and our team will contact you soon.</p>`,
             b,
             companyName,
           );
           ownerHtml = wrapOwner(
             "green",
-            "New booking request",
-            `<p>A new booking request was created for <strong>${b.lead_name}</strong> (${b.email}).</p>`,
+            "New request",
+            `<p>A new request was created for <strong>${b.lead_name}</strong> (${b.email}).</p>`,
             b,
             companyName,
           );
         } else {
-          leadSubject = `Booking restored — ${companyName}`;
-          ownerSubject = `Booking restored — ${b.lead_name}`;
+          leadSubject = `Request restored — ${companyName}`;
+          ownerSubject = `Request restored — ${b.lead_name}`;
           leadHtml = wrapLead(
             "indigo",
-            "Booking restored",
-            `<p>Dear ${b.lead_name},</p><p>Your booking request is active again with ${companyName}. We will be in touch as needed.</p>`,
+            "Request restored",
+            `<p>Dear ${b.lead_name},</p><p>Your request is active again with ${companyName}. We will be in touch as needed.</p>`,
             b,
             companyName,
           );
           ownerHtml = wrapOwner(
             "green",
-            "Booking restored",
-            `<p>Booking for <strong>${b.lead_name}</strong> was restored to <strong>new</strong> (was: ${previousStatus ?? "N/A"}).</p>`,
+            "Request restored",
+            `<p>Request for <strong>${b.lead_name}</strong> was restored to <strong>new</strong> (was: ${previousStatus ?? "N/A"}).</p>`,
             b,
             companyName,
           );
         }
         break;
       default:
-        leadSubject = `Booking update — ${companyName}`;
-        ownerSubject = `Booking status ${newStatus} — ${b.lead_name}`;
+        leadSubject = `Request update — ${companyName}`;
+        ownerSubject = `Request status ${newStatus} — ${b.lead_name}`;
         leadHtml = wrapLead(
           "indigo",
-          "Booking update",
-          `<p>Dear ${b.lead_name},</p><p>Your booking status was updated to <strong>${newStatus}</strong>.</p>`,
+          "Request update",
+          `<p>Dear ${b.lead_name},</p><p>Your request status was updated to <strong>${newStatus}</strong>.</p>`,
           b,
           companyName,
         );
         ownerHtml = wrapOwner(
           "green",
-          "Booking status changed",
-          `<p>Booking for <strong>${b.lead_name}</strong> changed from ${previousStatus ?? "N/A"} to <strong>${newStatus}</strong>.</p>`,
+          "Request status changed",
+          `<p>Request for <strong>${b.lead_name}</strong> changed from ${previousStatus ?? "N/A"} to <strong>${newStatus}</strong>.</p>`,
           b,
           companyName,
         );
