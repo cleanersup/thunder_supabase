@@ -26,7 +26,12 @@ interface StatusPayload {
   operation?: "INSERT" | "UPDATE";
 }
 
-async function sendEmailViaSMTP(toEmail: string, subject: string, htmlContent: string): Promise<void> {
+async function sendEmailViaSMTP(
+  toEmail: string,
+  subject: string,
+  htmlContent: string,
+  replyToEmail: string | null = null
+): Promise<void> {
   const smtpHost = "email-smtp.us-east-2.amazonaws.com";
   const smtpPort = 587;
   const smtpUser = Deno.env.get("AWS_SES_SMTP_USERNAME") || "";
@@ -78,6 +83,7 @@ async function sendEmailViaSMTP(toEmail: string, subject: string, htmlContent: s
     const headers = [
       `From: ${fromEmail}`,
       `To: ${toEmail}`,
+      ...(replyToEmail ? [`Reply-To: ${replyToEmail}`] : []),
       `Subject: ${subject}`,
       `Message-ID: ${messageId}`,
       "MIME-Version: 1.0",
@@ -355,11 +361,11 @@ serve(async (req) => {
     let ownerEmailSent = false;
     let clientEmailSent = false;
 
-    await sendEmailViaSMTP(ownerEmail, ownerSubject, ownerHtml);
+    await sendEmailViaSMTP(ownerEmail, ownerSubject, ownerHtml, ownerEmail);
     ownerEmailSent = true;
 
     if (shouldSendClientEmail && b.email) {
-      await sendEmailViaSMTP(b.email, leadSubject, leadHtml);
+      await sendEmailViaSMTP(b.email, leadSubject, leadHtml, ownerEmail);
       clientEmailSent = true;
     }
 

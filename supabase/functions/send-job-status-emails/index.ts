@@ -32,7 +32,12 @@ type JobRow = {
   property_zip: string | null;
 };
 
-async function sendEmailViaSMTP(toEmail: string, subject: string, htmlContent: string): Promise<void> {
+async function sendEmailViaSMTP(
+  toEmail: string,
+  subject: string,
+  htmlContent: string,
+  replyToEmail: string | null = null
+): Promise<void> {
   const smtpHost = "email-smtp.us-east-2.amazonaws.com";
   const smtpPort = 587;
   const smtpUser = Deno.env.get("AWS_SES_SMTP_USERNAME") || "";
@@ -84,6 +89,7 @@ async function sendEmailViaSMTP(toEmail: string, subject: string, htmlContent: s
     const headers = [
       `From: ${fromEmail}`,
       `To: ${toEmail}`,
+      ...(replyToEmail ? [`Reply-To: ${replyToEmail}`] : []),
       `Subject: ${subject}`,
       `Message-ID: ${messageId}`,
       "MIME-Version: 1.0",
@@ -214,7 +220,7 @@ serve(async (req) => {
       `<p>The job for <strong>${clientName}</strong> changed from <strong>${titleCaseStatus(previousStatus)}</strong> to <strong>${titleCaseStatus(newStatus)}</strong>.</p>${details}`
     );
 
-    await sendEmailViaSMTP(ownerEmail, ownerSubject, ownerBody);
+    await sendEmailViaSMTP(ownerEmail, ownerSubject, ownerBody, ownerEmail);
 
     if (clientEmail) {
       const clientSubject = `Update on your job with ${companyName}`;
@@ -222,7 +228,7 @@ serve(async (req) => {
         "Your job status changed",
         `<p>Hi ${clientName},</p><p>Your job status changed to <strong>${titleCaseStatus(newStatus)}</strong>.</p>${details}`
       );
-      await sendEmailViaSMTP(clientEmail, clientSubject, clientBody);
+      await sendEmailViaSMTP(clientEmail, clientSubject, clientBody, ownerEmail);
     }
 
     return new Response(JSON.stringify({ success: true }), {
