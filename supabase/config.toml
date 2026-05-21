@@ -18,6 +18,9 @@ verify_jwt = true
 [functions.stripe-client-card-setup]
 verify_jwt = true
 
+[functions.manage-client-property]
+verify_jwt = true
+
 [functions.revenuecat-webhook]
 verify_jwt = false
 
