@@ -27,7 +27,12 @@ interface BookingEmailRequest {
   };
 }
 
-async function sendEmailViaSMTP(toEmail: string, subject: string, htmlContent: string): Promise<void> {
+async function sendEmailViaSMTP(
+  toEmail: string,
+  subject: string,
+  htmlContent: string,
+  replyToEmail: string | null = null
+): Promise<void> {
   const smtpHost = "email-smtp.us-east-2.amazonaws.com";
   const smtpPort = 587;
   const smtpUser = Deno.env.get('AWS_SES_SMTP_USERNAME') || '';
@@ -79,6 +84,7 @@ async function sendEmailViaSMTP(toEmail: string, subject: string, htmlContent: s
     const headers = [
       `From: ${fromEmail}`,
       `To: ${toEmail}`,
+      ...(replyToEmail ? [`Reply-To: ${replyToEmail}`] : []),
       `Subject: ${subject}`,
       `Message-ID: ${messageId}`,
       'MIME-Version: 1.0',
@@ -304,13 +310,15 @@ serve(async (req) => {
     await sendEmailViaSMTP(
       leadEmail,
       `Booking Confirmation - ${companyName}`,
-      leadEmailHtml
+      leadEmailHtml,
+      ownerEmail
     );
 
     await sendEmailViaSMTP(
       ownerEmail,
       `🎉 New Lead Request - ${leadName} requesting ${bookingData.serviceType}`,
-      ownerEmailHtml
+      ownerEmailHtml,
+      ownerEmail
     );
 
     console.log('Both emails sent successfully');

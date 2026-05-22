@@ -705,7 +705,8 @@ async function sendEmailViaSMTP(
   toEmail: string,
   bccEmail: string | null,
   subject: string,
-  htmlContent: string
+  htmlContent: string,
+  replyToEmail: string | null = null
 ): Promise<void> {
   console.log('=== Starting SMTP Email Process ===');
 
@@ -808,6 +809,7 @@ async function sendEmailViaSMTP(
     const headers = [
       `From: ${fromEmail}`,
       `To: ${toEmail}`,
+      ...(replyToEmail ? [`Reply-To: ${replyToEmail}`] : []),
       `Subject: ${subject}`,
       `Message-ID: ${messageId}`,
       `X-Entity-Ref-ID: ${uniqueRef}`,
@@ -1001,7 +1003,7 @@ const handler = async (req: Request): Promise<Response> => {
 
       // Send email to client
       console.log(`Sending email to client: ${recipientEmail}`);
-      await sendEmailViaSMTP(recipientEmail, null, clientSubject, clientHtmlContent);
+      await sendEmailViaSMTP(recipientEmail, null, clientSubject, clientHtmlContent, ownerEmail);
       console.log('✓ Client email sent successfully');
 
       // Wait 3 seconds before sending owner email to prevent Gmail threading
@@ -1010,7 +1012,7 @@ const handler = async (req: Request): Promise<Response> => {
         await new Promise(resolve => setTimeout(resolve, 3000));
 
         console.log(`Sending copy to owner: ${ownerEmail}`);
-        await sendEmailViaSMTP(ownerEmail, null, ownerSubject, ownerHtmlContent);
+        await sendEmailViaSMTP(ownerEmail, null, ownerSubject, ownerHtmlContent, ownerEmail);
         console.log('✓ Owner email sent successfully');
       }
 

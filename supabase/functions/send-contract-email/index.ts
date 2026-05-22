@@ -171,7 +171,13 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-async function sendEmailViaSMTP(toEmail: string, bccEmail: string | null, subject: string, htmlContent: string): Promise<void> {
+async function sendEmailViaSMTP(
+  toEmail: string,
+  bccEmail: string | null,
+  subject: string,
+  htmlContent: string,
+  replyToEmail: string | null = null
+): Promise<void> {
   const smtpHost = "email-smtp.us-east-2.amazonaws.com";
   const smtpPort = 587;
   const smtpUser = Deno.env.get("AWS_SES_SMTP_USERNAME") || "";
@@ -224,6 +230,7 @@ async function sendEmailViaSMTP(toEmail: string, bccEmail: string | null, subjec
     const headers = [
       `From: ${fromEmail}`,
       `To: ${toEmail}`,
+      ...(replyToEmail ? [`Reply-To: ${replyToEmail}`] : []),
       `Subject: ${subject}`,
       `Message-ID: ${messageId}`,
       "X-Mailer: ThunderPro-Contracts",
@@ -310,12 +317,12 @@ serve(async (req: Request): Promise<Response> => {
 
       // Client email — includes Accept Contract + Download PDF buttons
       const clientHtml = generateContractClientEmailHtml(contract as Record<string, unknown>, companyName, publicSupabaseUrl);
-      await sendEmailViaSMTP(recipientEmail, null, subject, clientHtml);
+      await sendEmailViaSMTP(recipientEmail, null, subject, clientHtml, ownerEmail);
 
       // Owner email — includes only Download PDF (no Accept Contract button)
       if (ownerEmail && ownerEmail !== recipientEmail) {
         const ownerHtml = generateContractOwnerEmailHtml(contract as Record<string, unknown>, companyName, publicSupabaseUrl);
-        await sendEmailViaSMTP(ownerEmail, null, subject, ownerHtml);
+        await sendEmailViaSMTP(ownerEmail, null, subject, ownerHtml, ownerEmail);
       }
 
       return new Response(JSON.stringify({ success: true, message: "Email sent" }), {

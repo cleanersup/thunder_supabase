@@ -25,7 +25,8 @@ async function sendEmailViaSMTP(
   toEmail: string,
   bccEmail: string | null,
   subject: string,
-  htmlContent: string
+  htmlContent: string,
+  replyToEmail: string | null = null
 ): Promise<void> {
   console.log('=== Starting SMTP Email Process ===');
 
@@ -126,6 +127,7 @@ async function sendEmailViaSMTP(
     const headers = [
       `From: ${fromEmail}`,
       `To: ${toEmail}`,
+      ...(replyToEmail ? [`Reply-To: ${replyToEmail}`] : []),
       `Subject: ${subject}`,
       `Message-ID: ${messageId}`,
       `X-Entity-Ref-ID: ${uniqueRef}`,
@@ -326,6 +328,7 @@ serve(async (req) => {
           null,
           `Payment received — Invoice ${invoice.invoice_number}`,
           clientPaidHtml,
+          ownerEmail,
         );
 
         if (ownerEmail) {
@@ -335,6 +338,7 @@ serve(async (req) => {
             null,
             `Invoice paid: ${invoice.invoice_number} — ${invoice.client_name}`,
             ownerPaidHtml,
+            ownerEmail,
           );
         } else {
           console.warn("No merchant email (company_email or auth email); skipping owner payment confirmation");
@@ -703,7 +707,8 @@ serve(async (req) => {
         invoice.email,
         null,
         clientSubject,
-        clientEmailHtml
+        clientEmailHtml,
+        ownerEmail
       );
 
       console.log('Client email sent successfully');
@@ -716,7 +721,8 @@ serve(async (req) => {
           ownerEmail,
           null,
           ownerSubject,
-          ownerEmailHtml
+          ownerEmailHtml,
+          ownerEmail
         );
 
         console.log('Owner email sent successfully');
