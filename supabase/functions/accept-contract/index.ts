@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.76.1";
 import * as Sentry from "npm:@sentry/deno";
+import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -270,7 +271,7 @@ async function sendContractAcceptedNotifications(
   supabase: SupabaseClient,
   contract: Record<string, unknown>,
 ): Promise<void> {
-  const publicSupabaseUrl = Deno.env.get("PUBLIC_APP_URL") || Deno.env.get("APP_URL") || "https://staging.thunderpro.co";
+  const publicSupabaseUrl = resolvePublicSupabaseUrl();
   const userId = String(contract.user_id || "");
   if (!userId) {
     console.warn("accept-contract: no user_id on contract, skipping emails");

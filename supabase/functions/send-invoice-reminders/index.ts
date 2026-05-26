@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
+import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -306,10 +307,11 @@ serve(async (req) => {
           // Use payment_token (opaque) instead of raw UUID to prevent URL enumeration
           const paymentLink = `${publicAppUrl}/invoice/payment/${invoice.payment_token || invoice.id}`;
 
-          // Public URL for tracking pixel — must be reachable by email clients (Outlook, Gmail) when user opens email
-          const publicSupabaseUrl = publicAppUrlEnv || appUrlEnv || 'https://staging.thunderpro.co';
+          // Public URL for tracking pixel and edge function links
+          const publicSupabaseUrl = resolvePublicSupabaseUrl();
 
           console.log('Selected publicAppUrl:', publicAppUrl);
+          console.log('Public Supabase URL for invoice reminder links:', publicSupabaseUrl);
           console.log('Generated paymentLink:', paymentLink);
           console.log('=== End Payment Link Debug ===');
 

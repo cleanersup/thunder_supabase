@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
+import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -365,12 +366,10 @@ serve(async (req) => {
       const paymentLink = `${publicAppUrl}/invoice/payment/${invoice.payment_token || invoiceId}`;
 
       // Public Supabase URL for Edge Functions (download PDF, tracking pixel, etc.)
-      // Must be publicly accessible — SUPABASE_URL may be internal (e.g. kong:8000).
-      // Email clients (Outlook, Gmail) load the tracking pixel when the user opens the email;
-      // they cannot reach internal URLs.
-      const publicSupabaseUrl = publicAppUrlEnv || appUrlEnv || 'https://staging.thunderpro.co';
+      const publicSupabaseUrl = resolvePublicSupabaseUrl();
 
       console.log('Selected publicAppUrl:', publicAppUrl);
+      console.log('Public Supabase URL for invoice email links:', publicSupabaseUrl);
       console.log('Generated paymentLink:', paymentLink);
       console.log('=== End Payment Link Debug ===');
 

@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import * as Sentry from "npm:@sentry/deno";
+import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -955,9 +956,9 @@ const handler = async (req: Request): Promise<Response> => {
         company_phone: estimateData.phone || '',
       };
 
-      // Public URL for Edge Functions (download PDF, links, tracking pixel)
-      // Must be publicly accessible - SUPABASE_URL may be internal (e.g. kong:8000)
-      const publicSupabaseUrl = Deno.env.get('PUBLIC_APP_URL') || Deno.env.get('APP_URL') || 'https://staging.thunderpro.co';
+      // Public URL for Edge Functions (accept, download PDF, tracking pixel).
+      const publicSupabaseUrl = resolvePublicSupabaseUrl();
+      console.log('Public Supabase URL for estimate email links:', publicSupabaseUrl);
 
       // Generate tracking pixel URL (use public URL so email clients can reach it)
       const trackingPixelUrl = `${publicSupabaseUrl}/functions/v1/mark-viewed?type=estimate&id=${estimateData.id}`;

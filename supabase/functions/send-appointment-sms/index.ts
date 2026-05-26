@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.76.1';
 import * as Sentry from "npm:@sentry/deno";
+import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -140,11 +141,11 @@ serve(async (req) => {
             const companyName = companyInfo?.company_name || 'Thunder Pro';
             const formattedDate = formatDateInTimezone(appointment.scheduled_date, userTimezone);
 
-            // Get public app URL
+            // Frontend app URL for client/employee pages; edge URL for PDF download
             const publicAppUrl = Deno.env.get("PUBLIC_APP_URL") || Deno.env.get("APP_URL") || "https://app.staging.thunderpro.co";
+            const publicSupabaseUrl = resolvePublicSupabaseUrl();
 
-            // Generate PDF URL for client and employee
-            const pdfUrl = `${publicAppUrl}/functions/v1/download-appointment-pdf?id=${appointmentId}`;
+            const pdfUrl = `${publicSupabaseUrl}/functions/v1/download-appointment-pdf?id=${appointmentId}`;
 
             // Generate client info URL for employee (excluding email and phone)
             const clientInfoUrl = `${publicAppUrl}/appointment/${appointmentId}`;

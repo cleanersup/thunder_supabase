@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.76.1";
 import * as Sentry from "npm:@sentry/deno";
+import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -310,7 +311,7 @@ serve(async (req: Request): Promise<Response> => {
 
       const { data: profile } = await supabaseUser.from("profiles").select("company_name, company_email").eq("user_id", user.id).maybeSingle();
       const companyName = profile?.company_name || "Company Name";
-      const publicSupabaseUrl = Deno.env.get("PUBLIC_APP_URL") || Deno.env.get("APP_URL") || "https://staging.thunderpro.co";
+      const publicSupabaseUrl = resolvePublicSupabaseUrl();
 
       const subject = `Service Agreement - ${companyName}`;
       const ownerEmail = profile?.company_email || null;
