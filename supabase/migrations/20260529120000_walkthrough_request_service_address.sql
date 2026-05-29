@@ -11,26 +11,78 @@ ALTER TABLE public.walkthroughs
 COMMENT ON COLUMN public.walkthroughs.service_street IS 'Service address copied from the linked request/booking at conversion time.';
 COMMENT ON COLUMN public.walkthroughs.property_title IS 'Client property label from the request (e.g. Primary property, Casa Secundaria).';
 
--- Backfill existing request-linked walkthroughs from bookings.
+-- Backfill address from linked bookings (does not require bookings.client_property_id).
 UPDATE public.walkthroughs w
 SET
   service_street = b.street,
   service_apt = b.apt_suite,
   service_city = b.city,
   service_state = b.state,
-  service_zip = b.zip_code,
-  property_title = COALESCE(
-    NULLIF(trim(cp.title), ''),
-    CASE WHEN cp.is_primary THEN 'Primary property' ELSE NULL END
-  )
+  service_zip = b.zip_code
 FROM public.bookings b
-LEFT JOIN public.client_properties cp ON cp.id = b.client_property_id
 WHERE w.service_street IS NULL
   AND b.street IS NOT NULL
   AND (
     w.booking_id = b.id
     OR (b.converted_to_type = 'walkthrough' AND b.converted_to_id = w.id)
   );
+
+-- Backfill property_title when bookings.client_property_id exists (optional; added by 20260524120000).
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'bookings'
+      AND column_name = 'client_property_id'
+  ) THEN
+    UPDATE public.walkthroughs w
+    SET property_title = COALESCE(
+      NULLIF(trim(cp.title), ''),
+      CASE WHEN cp.is_primary THEN 'Primary property' ELSE NULL END
+    )
+    FROM public.bookings b
+    JOIN public.client_properties cp ON cp.id = b.client_property_id
+    WHERE w.property_title IS NULL
+      AND b.client_property_id IS NOT NULL
+      AND (
+        w.booking_id = b.id
+        OR (b.converted_to_type = 'walkthrough' AND b.converted_to_id = w.id)
+      );
+  END IF;
+END;
+$$;
+
+-- Match property title by address when client_property_id is unavailable.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_name = 'client_properties'
+  ) THEN
+    UPDATE public.walkthroughs w
+    SET property_title = COALESCE(
+      NULLIF(trim(cp.title), ''),
+      CASE WHEN cp.is_primary THEN 'Primary property' ELSE NULL END
+    )
+    FROM public.bookings b
+    JOIN public.client_properties cp ON cp.client_id = b.client_id
+      AND lower(trim(cp.street)) = lower(trim(b.street))
+      AND lower(trim(cp.city)) = lower(trim(b.city))
+      AND trim(cp.zip_code) = trim(b.zip_code)
+    WHERE w.property_title IS NULL
+      AND b.client_id IS NOT NULL
+      AND b.street IS NOT NULL
+      AND (
+        w.booking_id = b.id
+        OR (b.converted_to_type = 'walkthrough' AND b.converted_to_id = w.id)
+      );
+  END IF;
+END;
+$$;
 
 -- Ensure booking_id is set when only converted_to_* was persisted.
 UPDATE public.walkthroughs w

@@ -55,6 +55,11 @@ DECLARE
   v_job_label text := COALESCE(NULLIF(NEW.job_number, ''), LEFT(NEW.id::text, 8));
   v_invoice_total numeric(12,2);
   v_company_name text;
+  v_line_items jsonb;
+  v_deposit_invoice_number text;
+  v_discount_type text;
+  v_discount_value numeric(12,2);
+  v_tax_rate numeric(12,2);
 BEGIN
   -- 3.1) Publish: upcoming => create deposit invoice if configured and missing
   IF NEW.status = 'upcoming' AND OLD.status IS DISTINCT FROM NEW.status THEN
@@ -86,7 +91,10 @@ BEGIN
         due_date,
         invoice_name,
         notes,
-        line_items
+        line_items,
+        discount_type,
+        discount_value,
+        tax_rate
       ) VALUES (
         NEW.user_id,
         public.generate_job_invoice_number(),
@@ -106,7 +114,17 @@ BEGIN
         CURRENT_DATE,
         'Deposit – ' || v_job_label,
         'Deposit invoice for ' || v_job_label || '.',
-        COALESCE(NEW.line_items, '[]'::jsonb)
+        jsonb_build_array(
+          jsonb_build_object(
+            'name', 'Deposit – ' || v_job_label,
+            'quantity', 1,
+            'unit_price', NEW.deposit_amount,
+            'total', NEW.deposit_amount
+          )
+        ),
+        NULL,
+        NULL,
+        NULL
       )
       RETURNING id INTO v_new_invoice_id;
 
@@ -161,9 +179,33 @@ BEGIN
 
       IF v_deposit_paid THEN
         v_invoice_total := GREATEST(COALESCE(NEW.total_amount, 0) - COALESCE(NEW.deposit_amount, 0), 0);
+
+        SELECT inv.invoice_number
+        INTO v_deposit_invoice_number
+        FROM public.invoices inv
+        WHERE inv.id = NEW.deposit_invoice_id
+        LIMIT 1;
+
+        v_line_items := COALESCE(NEW.line_items, '[]'::jsonb)
+          || jsonb_build_array(
+            jsonb_build_object(
+              'name', 'Deposit Paid – ' || COALESCE(v_deposit_invoice_number, 'Deposit'),
+              'quantity', 1,
+              'unit_price', -COALESCE(NEW.deposit_amount, 0),
+              'total', -COALESCE(NEW.deposit_amount, 0)
+            )
+          );
       ELSE
         v_invoice_total := COALESCE(NEW.total_amount, 0);
+        v_line_items := COALESCE(NEW.line_items, '[]'::jsonb);
       END IF;
+
+      v_discount_type := CASE NEW.discount_type
+        WHEN 'percent' THEN 'percentage'
+        ELSE NEW.discount_type
+      END;
+      v_discount_value := NEW.discount_value;
+      v_tax_rate := NEW.tax_value;
 
       INSERT INTO public.invoices (
         user_id,
@@ -184,7 +226,10 @@ BEGIN
         due_date,
         invoice_name,
         notes,
-        line_items
+        line_items,
+        discount_type,
+        discount_value,
+        tax_rate
       ) VALUES (
         NEW.user_id,
         public.generate_job_invoice_number(),
@@ -210,7 +255,10 @@ BEGIN
           THEN 'Final balance for ' || v_job_label || '. Deposit of $' || COALESCE(NEW.deposit_amount, 0)::text || ' was previously paid.'
           ELSE 'Invoice for completed job ' || v_job_label || '.'
         END,
-        COALESCE(NEW.line_items, '[]'::jsonb)
+        v_line_items,
+        v_discount_type,
+        v_discount_value,
+        v_tax_rate
       )
       RETURNING id INTO v_new_invoice_id;
 
@@ -241,7 +289,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.orchestrate_job_invoices_on_status_change () IS
-'Orchestrates job deposit/final invoice creation and cancellation on status changes.';
+'Orchestrates job deposit/final invoice creation and cancellation on status changes. Deposit invoices use a single summary line item; balance invoices append a negative deposit line; full invoices copy job line items with discount/tax.';
 
 DROP TRIGGER IF EXISTS tr_orchestrate_job_invoices_on_status_change ON public.jobs;
 CREATE TRIGGER tr_orchestrate_job_invoices_on_status_change
