@@ -127,6 +127,27 @@ FROM auth.users u
 LEFT JOIN profiles p ON u.id = p.user_id
 WHERE u.email LIKE '%info@vipcleaningsvcs.com%';
 
+#ACTIVATE USER SUBSCRIPTION (subscription_status = active)
+# Full script: scripts/activate-user-subscription.sql
+
+-- Preview
+SELECT u.id, u.email, p.plan_tier, p.subscription_status, p.trial_end_date, p.revenue_cat_customer_id
+FROM auth.users u
+LEFT JOIN public.profiles p ON u.id = p.user_id
+WHERE u.email = 'alicianl22@gmail.com';
+
+-- Update
+UPDATE public.profiles p
+SET subscription_status = 'active', updated_at = now()
+FROM auth.users u
+WHERE p.user_id = u.id AND u.email = 'alicianl22@gmail.com';
+
+-- Verify
+SELECT u.email, p.plan_tier, p.subscription_status, p.updated_at
+FROM auth.users u
+LEFT JOIN public.profiles p ON u.id = p.user_id
+WHERE u.email = 'alicianl22@gmail.com';
+
 #CHECK IF USER HAS STRIPE ACCOUNT:
 
 SELECT stripe_account_id, stripe_onboarding_completed, stripe_charges_enabled, stripe_payouts_enabled FROM profiles WHERE user_id = 'fee24cde-9909-450a-9431-c238fbb5e156';
