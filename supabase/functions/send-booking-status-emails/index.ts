@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { resolveOwnerReplyEmail } from "../_shared/resolveOwnerReplyEmail.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -199,22 +200,26 @@ serve(async (req) => {
     const b = booking as BookingRow;
     const { data: profile } = await supabase
       .from("profiles")
-      .select("company_name")
+      .select("company_name, company_email")
       .eq("user_id", b.business_owner_id)
       .maybeSingle();
     const companyName = profile?.company_name || "Your cleaning provider";
 
-    const { data: authUser, error: authErr } = await supabase.auth.admin.getUserById(b.business_owner_id);
-    if (authErr || !authUser?.user?.email) {
-      console.error("[send-booking-status-emails] owner email lookup failed", authErr);
+    let ownerEmail: string;
+    let ownerReplyTo: string;
+    try {
+      ownerReplyTo = await resolveOwnerReplyEmail(supabase, b.business_owner_id);
+      ownerEmail = (profile?.company_email ?? "").trim() || ownerReplyTo;
+    } catch (lookupErr) {
+      console.error("[send-booking-status-emails] owner email lookup failed", lookupErr);
       return new Response(JSON.stringify({ error: "Could not resolve business owner email" }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    const ownerEmail = authUser.user.email;
     console.log("[send-booking-status-emails] recipients resolved", {
       ownerEmail,
+      ownerReplyTo,
       clientEmail: b.email || null,
       companyName,
       status: newStatus,
@@ -361,11 +366,11 @@ serve(async (req) => {
     let ownerEmailSent = false;
     let clientEmailSent = false;
 
-    await sendEmailViaSMTP(ownerEmail, ownerSubject, ownerHtml, ownerEmail);
+    await sendEmailViaSMTP(ownerEmail, ownerSubject, ownerHtml, ownerReplyTo);
     ownerEmailSent = true;
 
     if (shouldSendClientEmail && b.email) {
-      await sendEmailViaSMTP(b.email, leadSubject, leadHtml, ownerEmail);
+      await sendEmailViaSMTP(b.email, leadSubject, leadHtml, ownerReplyTo);
       clientEmailSent = true;
     }
 

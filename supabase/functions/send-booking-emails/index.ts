@@ -1,4 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { resolveOwnerReplyEmail } from "../_shared/resolveOwnerReplyEmail.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -9,6 +11,8 @@ interface BookingEmailRequest {
   leadEmail: string;
   leadName: string;
   ownerEmail: string;
+  /** When set, Reply-To is resolved from profiles.company_email (same as invoices/estimates). */
+  businessOwnerId?: string;
   companyName: string;
   bookingData: {
     serviceType: string;
@@ -121,11 +125,30 @@ serve(async (req) => {
       leadEmail,
       leadName,
       ownerEmail,
+      businessOwnerId,
       companyName,
       bookingData
     }: BookingEmailRequest = await req.json();
 
-    console.log('Sending booking emails to:', { leadEmail, ownerEmail });
+    let ownerReplyTo = (ownerEmail || "").trim();
+    let ownerInbox = ownerReplyTo;
+
+    if (businessOwnerId) {
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
+      ownerReplyTo = await resolveOwnerReplyEmail(supabase, businessOwnerId);
+      if (!ownerInbox) ownerInbox = ownerReplyTo;
+    }
+
+    if (!ownerReplyTo) {
+      throw new Error("Business owner email is required for Reply-To on request emails");
+    }
+    if (!ownerInbox) {
+      ownerInbox = ownerReplyTo;
+    }
+
+    console.log("Sending booking emails to:", { leadEmail, ownerInbox, ownerReplyTo });
 
     // Email 1: Confirmation to Lead
     const leadEmailHtml = `
@@ -311,14 +334,14 @@ serve(async (req) => {
       leadEmail,
       `Booking Confirmation - ${companyName}`,
       leadEmailHtml,
-      ownerEmail
+      ownerReplyTo,
     );
 
     await sendEmailViaSMTP(
-      ownerEmail,
+      ownerInbox,
       `🎉 New Lead Request - ${leadName} requesting ${bookingData.serviceType}`,
       ownerEmailHtml,
-      ownerEmail
+      ownerReplyTo,
     );
 
     console.log('Both emails sent successfully');
