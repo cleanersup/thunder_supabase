@@ -20,6 +20,85 @@ interface EstimateEmailRequest {
   isUpdate?: boolean;
 }
 
+function isPercentageDiscount(type: string | null | undefined): boolean {
+  return type === 'percentage' || type === 'percent';
+}
+
+function computeDiscountAmount(
+  subtotal: number,
+  discountType: string | null | undefined,
+  discountValue: number | string | null | undefined,
+): number {
+  const val = Number(discountValue);
+  if (!Number.isFinite(val) || val <= 0) return 0;
+  if (isPercentageDiscount(discountType)) {
+    return subtotal * val / 100;
+  }
+  return val;
+}
+
+function resolveEstimateDisplayTotal(estimate: {
+  subtotal?: number | null;
+  total?: number | null;
+  discount_type?: string | null;
+  discount_value?: number | null;
+}): number {
+  const subtotal = Number(estimate.subtotal) || 0;
+  const storedTotal = Number(estimate.total) || 0;
+
+  if (!estimate.discount_value || Number(estimate.discount_value) <= 0) {
+    return storedTotal || subtotal;
+  }
+
+  const discountAmount = computeDiscountAmount(subtotal, estimate.discount_type, estimate.discount_value);
+  const computedTotal = Math.max(0, subtotal - discountAmount);
+
+  if (Math.abs(storedTotal - subtotal) < 0.01 && computedTotal < subtotal) {
+    return computedTotal;
+  }
+
+  return storedTotal || computedTotal;
+}
+
+const PRICING_SECTION_PATTERN = /<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Pricing<\/h3>[\s\S]*?<\/table>\s*<\/tr>\s*<\/table>/;
+
+function formatCommercialPricingSection(estimate: any): string {
+  const f = (n: number) => `$${Number(n).toFixed(2)}`;
+  const subtotal = Number(estimate.subtotal) || 0;
+  const discountValue = Number(estimate.discount_value) || 0;
+  const hasDiscount = discountValue > 0 && !!estimate.discount_type;
+  const discountAmount = hasDiscount
+    ? computeDiscountAmount(subtotal, estimate.discount_type, discountValue)
+    : 0;
+  const total = resolveEstimateDisplayTotal(estimate);
+  const discountLabel = hasDiscount && isPercentageDiscount(estimate.discount_type)
+    ? `Discount (${discountValue}%):`
+    : 'Discount:';
+
+  return `<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Pricing</h3>
+<table cellpadding="0" cellspacing="0" style="width:100%;background-color:#f0fdf4">
+  <tr>
+    <td style="padding:16px">
+      <table cellpadding="0" cellspacing="0" style="width:100%">
+        <tr>
+          <td style="padding:8px 0;text-align:left">Subtotal:</td>
+          <td style="padding:8px 0;text-align:right">${f(subtotal)}</td>
+        </tr>
+        ${hasDiscount ? `
+        <tr>
+          <td style="padding:8px 0;text-align:left">${discountLabel}</td>
+          <td style="padding:8px 0;text-align:right">-${f(discountAmount)}</td>
+        </tr>` : ''}
+        <tr>
+          <td style="padding:12px 0 0 0;text-align:left;font-weight:bold;font-size:20px;color:#1e3a8a;border-top:1px solid #d1d5db">Total:</td>
+          <td style="padding:12px 0 0 0;text-align:right;font-weight:bold;font-size:20px;color:#1e3a8a;border-top:1px solid #d1d5db">${f(total)}</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>`;
+}
+
 // Client email template - for customers
 const generateResidentialClientEmailTemplate = (estimate: any, companyInfo: any, trackingPixelUrl: string, publicSupabaseUrl: string, userTimezone?: string): string => {
   const f = (n: number) => `$${n.toFixed(2)}`;
@@ -240,7 +319,7 @@ ${formatServiceBreakdown()}
         </tr>` : ''}
         <tr>
           <td style="padding:12px 0 0 0;text-align:left;font-weight:bold;font-size:20px;color:#1e3a8a;border-top:1px solid #d1d5db">Total:</td>
-          <td style="padding:12px 0 0 0;text-align:right;font-weight:bold;font-size:20px;color:#1e3a8a;border-top:1px solid #d1d5db">${f(estimate.total || 0)}</td>
+          <td style="padding:12px 0 0 0;text-align:right;font-weight:bold;font-size:20px;color:#1e3a8a;border-top:1px solid #d1d5db">${f(resolveEstimateDisplayTotal(estimate))}</td>
         </tr>
       </table>
     </td>
@@ -463,8 +542,8 @@ const generateResidentialOwnerEmailTemplate = (estimate: any, companyInfo: any, 
 <strong>Supplies:</strong> $${(estimate.supplies_cost || 0).toFixed(2)} | 
 <strong>Overhead:</strong> $${(estimate.overhead_cost || 0).toFixed(2)}<br>
 <strong>Total Costs:</strong> $${(estimate.total_operation_cost || 0).toFixed(2)} | 
-<strong>Profit:</strong> $${((estimate.total || 0) - (estimate.total_operation_cost || 0)).toFixed(2)} 
-(${(((estimate.total || 0) - (estimate.total_operation_cost || 0)) / (estimate.total || 1) * 100).toFixed(1)}%)
+<strong>Profit:</strong> $${(resolveEstimateDisplayTotal(estimate) - (estimate.total_operation_cost || 0)).toFixed(2)}
+(${((resolveEstimateDisplayTotal(estimate) - (estimate.total_operation_cost || 0)) / (resolveEstimateDisplayTotal(estimate) || 1) * 100).toFixed(1)}%)
 </p>
 </div>
 
@@ -500,7 +579,7 @@ ${formatServiceBreakdown()}
         </tr>` : ''}
         <tr>
           <td style="padding:12px 0 0 0;text-align:left;font-weight:bold;font-size:20px;color:#1e3a8a;border-top:1px solid #d1d5db">Total:</td>
-          <td style="padding:12px 0 0 0;text-align:right;font-weight:bold;font-size:20px;color:#1e3a8a;border-top:1px solid #d1d5db">${f(estimate.total || 0)}</td>
+          <td style="padding:12px 0 0 0;text-align:right;font-weight:bold;font-size:20px;color:#1e3a8a;border-top:1px solid #d1d5db">${f(resolveEstimateDisplayTotal(estimate))}</td>
         </tr>
       </table>
     </td>
@@ -646,6 +725,8 @@ const generateCommercialClientEmailTemplate = (estimate: any, companyInfo: any, 
     }
   }
 
+  commercialHtml = commercialHtml.replace(PRICING_SECTION_PATTERN, formatCommercialPricingSection(estimate));
+
   return commercialHtml;
 };
 
@@ -683,6 +764,8 @@ const generateCommercialOwnerEmailTemplate = (estimate: any, companyInfo: any, p
       );
     }
   }
+
+  commercialHtml = commercialHtml.replace(PRICING_SECTION_PATTERN, formatCommercialPricingSection(estimate));
 
   return commercialHtml;
 };
