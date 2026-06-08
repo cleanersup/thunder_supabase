@@ -6,10 +6,13 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+type ClientChannel = "email" | "sms" | "both" | null;
+
 interface StatusPayload {
   jobId: string;
   previousStatus: string;
   newStatus: string;
+  clientChannel?: ClientChannel;
 }
 
 type JobRow = {
@@ -30,13 +33,38 @@ type JobRow = {
   property_city: string | null;
   property_state: string | null;
   property_zip: string | null;
+  assigned_employees: string[] | unknown;
+  invoice_ids: string[] | null;
 };
+
+type EmployeeRow = {
+  id: string;
+  first_name: string;
+  last_name: string;
+  email: string | null;
+};
+
+const EMPLOYEE_NOTIFY_STATUSES = new Set(["upcoming", "cancelled"]);
+const CLIENT_NOTIFY_STATUSES = new Set(["upcoming", "cancelled", "completed"]);
+
+function isAutoTemporalTransition(previousStatus: string, newStatus: string): boolean {
+  return (
+    (previousStatus === "upcoming" && newStatus === "today") ||
+    (previousStatus === "today" && newStatus === "missed") ||
+    (previousStatus === "upcoming" && newStatus === "missed")
+  );
+}
+
+function shouldSendClientEmail(channel: ClientChannel | undefined): boolean {
+  if (!channel || channel === "email") return true;
+  return false;
+}
 
 async function sendEmailViaSMTP(
   toEmail: string,
   subject: string,
   htmlContent: string,
-  replyToEmail: string | null = null
+  replyToEmail: string | null = null,
 ): Promise<void> {
   const smtpHost = "email-smtp.us-east-2.amazonaws.com";
   const smtpPort = 587;
@@ -123,10 +151,38 @@ function titleCaseStatus(status: string): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
+function formatTime(timeStr: string | null): string {
+  if (!timeStr) return "Por confirmar";
+  const [hours, minutes] = timeStr.split(":");
+  const hour = parseInt(hours, 10);
+  const ampm = hour >= 12 ? "PM" : "AM";
+  const displayHour = hour % 12 || 12;
+  return `${displayHour}:${minutes} ${ampm}`;
+}
+
+function formatDate(dateStr: string, timezone = "America/New_York"): string {
+  const [year, month, day] = dateStr.split("-").map(Number);
+  const dateAtMidday = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  return new Intl.DateTimeFormat("es-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    timeZone: timezone,
+  }).format(dateAtMidday);
+}
+
 function formatAddress(job: JobRow): string {
   const apt = job.property_apt ? ` ${job.property_apt}` : "";
   const cityStateZip = [job.property_city, job.property_state, job.property_zip].filter(Boolean).join(", ");
-  return [job.property_street ? `${job.property_street}${apt}` : "", cityStateZip].filter(Boolean).join(" • ");
+  return [job.property_street ? `${job.property_street}${apt}` : "", cityStateZip].filter(Boolean).join(", ");
+}
+
+function formatSchedule(job: JobRow, timezone: string): string {
+  const date = formatDate(job.scheduled_date, timezone);
+  const start = formatTime(job.start_time);
+  const end = job.end_time ? ` – ${formatTime(job.end_time)}` : "";
+  return `${date} a las ${start}${end}`;
 }
 
 function wrapEmail(title: string, body: string): string {
@@ -150,17 +206,191 @@ function wrapEmail(title: string, body: string): string {
 </html>`;
 }
 
+function buildOwnerEmail(
+  job: JobRow,
+  companyName: string,
+  previousStatus: string,
+  newStatus: string,
+): { subject: string; html: string } {
+  const clientName = job.client_name || "Client";
+  const details = `
+    <p><strong>Job:</strong> ${job.job_number || job.id}</p>
+    <p><strong>Status:</strong> ${titleCaseStatus(previousStatus)} → ${titleCaseStatus(newStatus)}</p>
+    <p><strong>Service:</strong> ${job.service_type}</p>
+    <p><strong>Date:</strong> ${job.scheduled_date}</p>
+    <p><strong>Time:</strong> ${job.start_time || "N/A"}${job.end_time ? ` - ${job.end_time}` : ""}</p>
+    <p><strong>Property:</strong> ${formatAddress(job) || "N/A"}</p>
+    <p><strong>Total:</strong> $${(job.total_amount ?? 0).toFixed(2)} | <strong>Balance Due:</strong> $${(job.balance_due ?? 0).toFixed(2)}</p>
+  `;
+
+  const subject = newStatus === "completed"
+    ? `Job ${job.job_number || ""} completed — ${companyName}`.trim()
+    : `Job ${job.job_number || ""} status ${titleCaseStatus(newStatus)} — ${companyName}`.trim();
+
+  const title = newStatus === "completed" ? "Job completed" : "Job status updated";
+  const intro = newStatus === "completed"
+    ? `<p>The job for <strong>${clientName}</strong> has been marked as <strong>Completed</strong>.</p>`
+    : `<p>The job for <strong>${clientName}</strong> changed from <strong>${titleCaseStatus(previousStatus)}</strong> to <strong>${titleCaseStatus(newStatus)}</strong>.</p>`;
+
+  return {
+    subject,
+    html: wrapEmail(title, `${intro}${details}`),
+  };
+}
+
+function buildClientEmail(
+  job: JobRow,
+  companyName: string,
+  newStatus: string,
+  previousStatus: string,
+  timezone: string,
+  paymentLink: string | null,
+): { subject: string; html: string } | null {
+  const clientName = job.client_name || "Cliente";
+  const schedule = formatSchedule(job, timezone);
+  const address = formatAddress(job) || "N/A";
+
+  if (newStatus === "completed") {
+    const invoiceBlock = paymentLink
+      ? `<p style="margin-top:20px;"><a href="${paymentLink}" style="display:inline-block;background:#1e3a8a;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold;">Ver factura y pagar</a></p>`
+      : "";
+    return {
+      subject: `Tu trabajo ha sido completado — ${companyName}`,
+      html: wrapEmail(
+        "Trabajo completado",
+        `<p>Hola ${clientName},</p>
+        <p><strong>Tu trabajo ha sido completado.</strong></p>
+        <p>Gracias por confiar en ${companyName}. Esperamos que todo haya quedado a tu satisfacción.</p>
+        ${invoiceBlock}`,
+      ),
+    };
+  }
+
+  if (newStatus === "cancelled") {
+    return {
+      subject: `Tu trabajo ha sido cancelado — ${companyName}`,
+      html: wrapEmail(
+        "Trabajo cancelado",
+        `<p>Hola ${clientName},</p>
+        <p>Tu trabajo programado para <strong>${schedule}</strong> ha sido <strong>cancelado</strong>.</p>
+        <p><strong>Dirección:</strong> ${address}</p>
+        <p>Si tienes preguntas, contáctanos directamente.</p>`,
+      ),
+    };
+  }
+
+  if (newStatus === "upcoming") {
+    const isReschedule = ["upcoming", "today", "ongoing", "missed"].includes(previousStatus);
+    const title = isReschedule ? "Trabajo reagendado" : "Trabajo confirmado";
+    const intro = isReschedule
+      ? `<p>Hola ${clientName},</p><p>Tu trabajo ha sido <strong>reagendado</strong>.</p>`
+      : `<p>Hola ${clientName},</p><p>Tu trabajo ha sido <strong>confirmado</strong>.</p>`;
+
+    return {
+      subject: isReschedule
+        ? `Tu trabajo ha sido reagendado — ${companyName}`
+        : `Tu trabajo ha sido confirmado — ${companyName}`,
+      html: wrapEmail(
+        title,
+        `${intro}
+        <p><strong>Fecha y hora:</strong> ${schedule}</p>
+        <p><strong>Dirección:</strong> ${address}</p>
+        <p>Te esperamos. Si necesitas hacer algún cambio, contáctanos.</p>`,
+      ),
+    };
+  }
+
+  return null;
+}
+
+function buildEmployeeEmail(
+  job: JobRow,
+  employee: EmployeeRow,
+  companyName: string,
+  newStatus: string,
+  timezone: string,
+): { subject: string; html: string } {
+  const clientName = job.client_name || "Cliente";
+  const schedule = formatSchedule(job, timezone);
+  const address = formatAddress(job) || "N/A";
+  const employeeName = `${employee.first_name} ${employee.last_name}`.trim();
+
+  if (newStatus === "cancelled") {
+    return {
+      subject: `Job cancelled — ${job.job_number || companyName}`,
+      html: wrapEmail(
+        "Job cancelled",
+        `<p>Hi ${employeeName},</p>
+        <p>The following assigned job has been <strong>cancelled</strong>:</p>
+        <p><strong>Client:</strong> ${clientName}</p>
+        <p><strong>Date/Time:</strong> ${schedule}</p>
+        <p><strong>Address:</strong> ${address}</p>`,
+      ),
+    };
+  }
+
+  return {
+    subject: `Job assigned — ${job.job_number || companyName}`,
+    html: wrapEmail(
+      "Job assignment",
+      `<p>Hi ${employeeName},</p>
+      <p>You have been assigned to a job:</p>
+      <p><strong>Client:</strong> ${clientName}</p>
+      <p><strong>Date/Time:</strong> ${schedule}</p>
+      <p><strong>Address:</strong> ${address}</p>
+      <p><strong>Service:</strong> ${job.service_type}</p>`,
+    ),
+  };
+}
+
+function normalizeEmployeeIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => (typeof item === "string" ? item : (item as { id?: string })?.id))
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+}
+
+async function resolveInvoicePaymentLink(
+  supabase: ReturnType<typeof createClient>,
+  invoiceIds: string[] | null | undefined,
+): Promise<string | null> {
+  if (!invoiceIds?.length) return null;
+
+  const { data: invoice } = await supabase
+    .from("invoices")
+    .select("id, payment_token")
+    .in("id", invoiceIds)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!invoice) return null;
+
+  const publicAppUrl = Deno.env.get("PUBLIC_APP_URL") ||
+    Deno.env.get("APP_URL") ||
+    "https://app.staging.thunderpro.co";
+  return `${publicAppUrl}/invoice/payment/${invoice.payment_token || invoice.id}`;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { jobId, previousStatus, newStatus } = await req.json() as StatusPayload;
+    const { jobId, previousStatus, newStatus, clientChannel } = await req.json() as StatusPayload;
 
     if (!jobId || !newStatus) {
       return new Response(JSON.stringify({ error: "jobId and newStatus are required" }), {
         status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const prev = previousStatus || "";
+    if (isAutoTemporalTransition(prev, newStatus)) {
+      return new Response(JSON.stringify({ success: true, skipped: "auto_temporal_transition" }), {
+        status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -186,11 +416,12 @@ serve(async (req) => {
 
     const { data: profile } = await supabase
       .from("profiles")
-      .select("company_name")
+      .select("company_name, timezone")
       .eq("user_id", row.user_id)
       .maybeSingle();
 
     const companyName = profile?.company_name || "Thunder Pro";
+    const timezone = profile?.timezone || "America/New_York";
 
     const { data: authUser, error: authErr } = await supabase.auth.admin.getUserById(row.user_id);
     if (authErr || !authUser?.user?.email) {
@@ -201,37 +432,41 @@ serve(async (req) => {
     }
 
     const ownerEmail = authUser.user.email;
-    const clientEmail = row.client_email || "";
-    const clientName = row.client_name || "Client";
+    const sent: string[] = [];
 
-    const details = `
-      <p><strong>Job:</strong> ${row.job_number || row.id}</p>
-      <p><strong>Status:</strong> ${titleCaseStatus(previousStatus)} -> ${titleCaseStatus(newStatus)}</p>
-      <p><strong>Service:</strong> ${row.service_type}</p>
-      <p><strong>Date:</strong> ${row.scheduled_date}</p>
-      <p><strong>Time:</strong> ${row.start_time || "N/A"}${row.end_time ? ` - ${row.end_time}` : ""}</p>
-      <p><strong>Property:</strong> ${formatAddress(row) || "N/A"}</p>
-      <p><strong>Total:</strong> $${(row.total_amount ?? 0).toFixed(2)} | <strong>Balance Due:</strong> $${(row.balance_due ?? 0).toFixed(2)}</p>
-    `;
+    const ownerMail = buildOwnerEmail(row, companyName, prev, newStatus);
+    await sendEmailViaSMTP(ownerEmail, ownerMail.subject, ownerMail.html, ownerEmail);
+    sent.push("owner");
 
-    const ownerSubject = `Job ${row.job_number || ""} status ${titleCaseStatus(newStatus)} — ${companyName}`.trim();
-    const ownerBody = wrapEmail(
-      "Job status updated",
-      `<p>The job for <strong>${clientName}</strong> changed from <strong>${titleCaseStatus(previousStatus)}</strong> to <strong>${titleCaseStatus(newStatus)}</strong>.</p>${details}`
-    );
-
-    await sendEmailViaSMTP(ownerEmail, ownerSubject, ownerBody, ownerEmail);
-
-    if (clientEmail) {
-      const clientSubject = `Update on your job with ${companyName}`;
-      const clientBody = wrapEmail(
-        "Your job status changed",
-        `<p>Hi ${clientName},</p><p>Your job status changed to <strong>${titleCaseStatus(newStatus)}</strong>.</p>${details}`
-      );
-      await sendEmailViaSMTP(clientEmail, clientSubject, clientBody, ownerEmail);
+    if (CLIENT_NOTIFY_STATUSES.has(newStatus) && row.client_email && shouldSendClientEmail(clientChannel)) {
+      const paymentLink = newStatus === "completed"
+        ? await resolveInvoicePaymentLink(supabase, row.invoice_ids)
+        : null;
+      const clientMail = buildClientEmail(row, companyName, newStatus, prev, timezone, paymentLink);
+      if (clientMail) {
+        await sendEmailViaSMTP(row.client_email, clientMail.subject, clientMail.html, ownerEmail);
+        sent.push("client");
+      }
     }
 
-    return new Response(JSON.stringify({ success: true }), {
+    if (EMPLOYEE_NOTIFY_STATUSES.has(newStatus)) {
+      const employeeIds = normalizeEmployeeIds(row.assigned_employees);
+      if (employeeIds.length > 0) {
+        const { data: employees } = await supabase
+          .from("employees")
+          .select("id, first_name, last_name, email")
+          .in("id", employeeIds);
+
+        for (const employee of (employees || []) as EmployeeRow[]) {
+          if (!employee.email) continue;
+          const mail = buildEmployeeEmail(row, employee, companyName, newStatus, timezone);
+          await sendEmailViaSMTP(employee.email, mail.subject, mail.html, ownerEmail);
+          sent.push(`employee:${employee.id}`);
+        }
+      }
+    }
+
+    return new Response(JSON.stringify({ success: true, sent }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
