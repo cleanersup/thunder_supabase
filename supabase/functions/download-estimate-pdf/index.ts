@@ -814,7 +814,7 @@ serve(async (req: Request): Promise<Response> => {
     try {
       // Get token from URL query parameter
       const url = new URL(req.url);
-      const token = url.searchParams.get('token');
+      const token = url.searchParams.get('token')?.trim();
 
       if (!token) {
         return new Response(
@@ -829,8 +829,9 @@ serve(async (req: Request): Promise<Response> => {
         Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
       );
 
-      // Fetch estimate by public_share_token or by ID (fallback)
-      // First try to find by public_share_token, if not found, try by ID
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token);
+
+      // Fetch estimate by public_share_token or by ID (fallback for email links)
       let estimate;
       let estimateError;
 
@@ -840,8 +841,12 @@ serve(async (req: Request): Promise<Response> => {
         .eq('public_share_token', token)
         .maybeSingle();
 
-      if (tokenError || !estimateByToken) {
-        // Fallback: try to find by ID (in case token is actually an estimate ID)
+      if (tokenError) {
+        estimateError = tokenError;
+      } else if (estimateByToken) {
+        estimate = estimateByToken;
+        estimateError = null;
+      } else if (isUuid) {
         const { data: estimateById, error: idError } = await supabase
           .from('estimates')
           .select('*')
@@ -850,9 +855,6 @@ serve(async (req: Request): Promise<Response> => {
 
         estimate = estimateById;
         estimateError = idError;
-      } else {
-        estimate = estimateByToken;
-        estimateError = null;
       }
 
       if (estimateError || !estimate) {

@@ -328,7 +328,7 @@ ${formatServiceBreakdown()}
 
 <div style="text-align:center;margin:30px 0">
 <a href="${publicSupabaseUrl}/functions/v1/accept-estimate?id=${estimate.id}" style="display:inline-block;background:#10b981;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">Accept Estimate</a>
-<a href="${publicSupabaseUrl}/functions/v1/download-estimate-pdf?token=${estimate.public_share_token || estimate.id}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">Download PDF</a>
+<a href="${publicSupabaseUrl}/functions/v1/download-estimate-pdf?token=${encodeURIComponent(estimate.id)}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">Download PDF</a>
 </div>
 
 </div>
@@ -587,7 +587,7 @@ ${formatServiceBreakdown()}
 </table>
 
 <div style="text-align:center;margin:30px 0">
-<a href="${publicSupabaseUrl}/functions/v1/download-estimate-pdf?token=${estimate.public_share_token || estimate.id}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">Download PDF</a>
+<a href="${publicSupabaseUrl}/functions/v1/download-estimate-pdf?token=${encodeURIComponent(estimate.id)}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">Download PDF</a>
 </div>
 
 </div>
