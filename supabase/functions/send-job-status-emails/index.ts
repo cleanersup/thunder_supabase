@@ -152,7 +152,7 @@ function titleCaseStatus(status: string): string {
 }
 
 function formatTime(timeStr: string | null): string {
-  if (!timeStr) return "Por confirmar";
+  if (!timeStr) return "TBD";
   const [hours, minutes] = timeStr.split(":");
   const hour = parseInt(hours, 10);
   const ampm = hour >= 12 ? "PM" : "AM";
@@ -163,7 +163,7 @@ function formatTime(timeStr: string | null): string {
 function formatDate(dateStr: string, timezone = "America/New_York"): string {
   const [year, month, day] = dateStr.split("-").map(Number);
   const dateAtMidday = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-  return new Intl.DateTimeFormat("es-US", {
+  return new Intl.DateTimeFormat("en-US", {
     weekday: "long",
     year: "numeric",
     month: "long",
@@ -182,7 +182,7 @@ function formatSchedule(job: JobRow, timezone: string): string {
   const date = formatDate(job.scheduled_date, timezone);
   const start = formatTime(job.start_time);
   const end = job.end_time ? ` – ${formatTime(job.end_time)}` : "";
-  return `${date} a las ${start}${end}`;
+  return `${date} at ${start}${end}`;
 }
 
 function wrapEmail(title: string, body: string): string {
@@ -246,21 +246,21 @@ function buildClientEmail(
   timezone: string,
   paymentLink: string | null,
 ): { subject: string; html: string } | null {
-  const clientName = job.client_name || "Cliente";
+  const clientName = job.client_name || "Client";
   const schedule = formatSchedule(job, timezone);
   const address = formatAddress(job) || "N/A";
 
   if (newStatus === "completed") {
     const invoiceBlock = paymentLink
-      ? `<p style="margin-top:20px;"><a href="${paymentLink}" style="display:inline-block;background:#1e3a8a;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold;">Ver factura y pagar</a></p>`
+      ? `<p style="margin-top:20px;"><a href="${paymentLink}" style="display:inline-block;background:#1e3a8a;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold;">View invoice and pay</a></p>`
       : "";
     return {
-      subject: `Tu trabajo ha sido completado — ${companyName}`,
+      subject: `Your job has been completed — ${companyName}`,
       html: wrapEmail(
-        "Trabajo completado",
-        `<p>Hola ${clientName},</p>
-        <p><strong>Tu trabajo ha sido completado.</strong></p>
-        <p>Gracias por confiar en ${companyName}. Esperamos que todo haya quedado a tu satisfacción.</p>
+        "Job completed",
+        `<p>Hi ${clientName},</p>
+        <p><strong>Your job has been completed.</strong></p>
+        <p>Thank you for choosing ${companyName}. We hope everything met your expectations.</p>
         ${invoiceBlock}`,
       ),
     };
@@ -268,34 +268,34 @@ function buildClientEmail(
 
   if (newStatus === "cancelled") {
     return {
-      subject: `Tu trabajo ha sido cancelado — ${companyName}`,
+      subject: `Your job has been cancelled — ${companyName}`,
       html: wrapEmail(
-        "Trabajo cancelado",
-        `<p>Hola ${clientName},</p>
-        <p>Tu trabajo programado para <strong>${schedule}</strong> ha sido <strong>cancelado</strong>.</p>
-        <p><strong>Dirección:</strong> ${address}</p>
-        <p>Si tienes preguntas, contáctanos directamente.</p>`,
+        "Job cancelled",
+        `<p>Hi ${clientName},</p>
+        <p>Your job scheduled for <strong>${schedule}</strong> has been <strong>cancelled</strong>.</p>
+        <p><strong>Address:</strong> ${address}</p>
+        <p>If you have any questions, please contact us directly.</p>`,
       ),
     };
   }
 
   if (newStatus === "upcoming") {
     const isReschedule = ["upcoming", "today", "ongoing", "missed"].includes(previousStatus);
-    const title = isReschedule ? "Trabajo reagendado" : "Trabajo confirmado";
+    const title = isReschedule ? "Job rescheduled" : "Job confirmed";
     const intro = isReschedule
-      ? `<p>Hola ${clientName},</p><p>Tu trabajo ha sido <strong>reagendado</strong>.</p>`
-      : `<p>Hola ${clientName},</p><p>Tu trabajo ha sido <strong>confirmado</strong>.</p>`;
+      ? `<p>Hi ${clientName},</p><p>Your job has been <strong>rescheduled</strong>.</p>`
+      : `<p>Hi ${clientName},</p><p>Your job has been <strong>confirmed</strong>.</p>`;
 
     return {
       subject: isReschedule
-        ? `Tu trabajo ha sido reagendado — ${companyName}`
-        : `Tu trabajo ha sido confirmado — ${companyName}`,
+        ? `Your job has been rescheduled — ${companyName}`
+        : `Your job has been confirmed — ${companyName}`,
       html: wrapEmail(
         title,
         `${intro}
-        <p><strong>Fecha y hora:</strong> ${schedule}</p>
-        <p><strong>Dirección:</strong> ${address}</p>
-        <p>Te esperamos. Si necesitas hacer algún cambio, contáctanos.</p>`,
+        <p><strong>Date and time:</strong> ${schedule}</p>
+        <p><strong>Address:</strong> ${address}</p>
+        <p>We look forward to seeing you. If you need to make any changes, please contact us.</p>`,
       ),
     };
   }
@@ -310,7 +310,7 @@ function buildEmployeeEmail(
   newStatus: string,
   timezone: string,
 ): { subject: string; html: string } {
-  const clientName = job.client_name || "Cliente";
+  const clientName = job.client_name || "Client";
   const schedule = formatSchedule(job, timezone);
   const address = formatAddress(job) || "N/A";
   const employeeName = `${employee.first_name} ${employee.last_name}`.trim();
