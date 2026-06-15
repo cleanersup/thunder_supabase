@@ -19,6 +19,15 @@ scp -r dist/* thunderpro.co:/var/www/thunder_dashboard/
 #CONNECT TO DB
 docker exec -it supabase_db_euydrdzayvjahstvmwoj psql -U postgres -d postgres
 
+# --- Fix 413 Request Entity Too Large (walkthrough photos / large REST JSON) ---
+# Root cause: nginx default client_max_body_size is 1m on /rest/; base64 photos in one INSERT exceed it.
+# App fix (swift-slate): upload walkthrough photos to Storage, save URLs in residential/commercial_walkthrough_data.
+# Server fix: in nginx site config, inside location /rest/ { ... } add:
+#   client_max_body_size 50M;
+# Reference: swift-slate/nginx-supabase-config.conf (location /rest/ block)
+# Then on staging:
+#   sudo nginx -t && sudo systemctl reload nginx
+
 #DEACTIVATE PAGER ON PSQL
 \pset pager off
 
