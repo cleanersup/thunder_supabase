@@ -411,6 +411,7 @@ serve(async (req) => {
                     <strong>Name:</strong> ${invoice.client_name}<br>
                     <strong>Email:</strong> ${invoice.email}<br>
                     <strong>Phone:</strong> ${invoice.phone}<br>
+                    ${invoice.property_title ? `<strong>Property:</strong> ${invoice.property_title}<br>` : ''}
                     <strong>Address:</strong> ${invoice.address}${invoice.apt ? `, ${invoice.apt}` : ''}, ${invoice.city}, ${invoice.state} ${invoice.zip}
                   </p>
                 </td>
@@ -581,6 +582,7 @@ serve(async (req) => {
                     <strong>Name:</strong> ${invoice.client_name}<br>
                     <strong>Email:</strong> ${invoice.email}<br>
                     <strong>Phone:</strong> ${invoice.phone}<br>
+                    ${invoice.property_title ? `<strong>Property:</strong> ${invoice.property_title}<br>` : ''}
                     <strong>Address:</strong> ${invoice.address}${invoice.apt ? `, ${invoice.apt}` : ''}, ${invoice.city}, ${invoice.state} ${invoice.zip}
                   </p>
                 </td>
