@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
+import { computeInvoiceAmountDue } from "../_shared/invoiceAmountDue.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -251,6 +252,7 @@ serve(async (req) => {
 
       const invoiceDateFormatted = formatDateInTimezone(invoice.invoice_date, userTimezone);
       const dueDateFormatted = formatDateInTimezone(invoice.due_date, userTimezone);
+      const amountDue = computeInvoiceAmountDue(invoice);
       const f = (n: number) => `$${n.toFixed(2)}`;
 
       // ── Paid confirmation (client + merchant) — used by Stripe/manual flows via DB trigger or direct invoke
@@ -491,7 +493,7 @@ serve(async (req) => {
                   <table cellpadding="16" cellspacing="0" border="0" width="100%" style="background-color:#f0fdf4">
                     <tr>
                       <td style="text-align:left;font-weight:bold;font-size:20px;color:#1e3a8a">Total Amount Due:</td>
-                      <td style="text-align:right;font-weight:bold;font-size:20px;color:#1e3a8a">${f(invoice.total)}</td>
+                      <td style="text-align:right;font-weight:bold;font-size:20px;color:#1e3a8a">${f(amountDue)}</td>
                     </tr>
                   </table>
                 </td>
@@ -649,7 +651,7 @@ serve(async (req) => {
                   <table cellpadding="16" cellspacing="0" border="0" width="100%" style="background-color:#f0fdf4">
                     <tr>
                       <td style="text-align:left;font-weight:bold;font-size:20px;color:#1e3a8a">Total:</td>
-                      <td style="text-align:right;font-weight:bold;font-size:20px;color:#1e3a8a">${f(invoice.total)}</td>
+                      <td style="text-align:right;font-weight:bold;font-size:20px;color:#1e3a8a">${f(amountDue)}</td>
                     </tr>
                   </table>
                 </td>

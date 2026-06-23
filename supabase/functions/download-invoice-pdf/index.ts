@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.76.1';
 import * as Sentry from "npm:@sentry/deno";
+import { computeInvoiceAmountDue } from "../_shared/invoiceAmountDue.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -218,8 +219,9 @@ async function generateInvoicePDF(invoice: any, profile: any): Promise<Uint8Arra
   doc.setFontSize(20);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(darkBlue[0], darkBlue[1], darkBlue[2]);
+  const amountDue = computeInvoiceAmountDue(invoice);
   doc.text('Total Amount Due:', margin + 10, yPosition + 4);
-  doc.text(`$${formatCurrency(invoice.total)}`, pageWidth - margin - 10, yPosition + 4, { align: 'right' });
+  doc.text(`$${formatCurrency(amountDue)}`, pageWidth - margin - 10, yPosition + 4, { align: 'right' });
   yPosition += 25;
 
   // ===== FOOTER (Dark Blue Banner) =====
