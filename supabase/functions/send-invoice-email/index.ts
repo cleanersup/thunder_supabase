@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
 import { computeInvoiceAmountDue } from "../_shared/invoiceAmountDue.ts";
+import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -222,33 +223,9 @@ serve(async (req) => {
         ownerEmail = authData.user?.email ?? null;
       }
 
-      // Helper function to format dates in user's timezone
-      // FIX: invoice_date and due_date are stored as DATE (YYYY-MM-DD) without timezone info
-      // Problem: new Date("2024-12-26") is interpreted as UTC midnight (2024-12-26T00:00:00Z)
-      // When formatted in timezone like "America/New_York" (UTC-5), it becomes 2024-12-25T19:00:00 (previous day)
-      // Solution: Parse date components and create date at midday in UTC to avoid day shift
-      const formatDateInTimezone = (dateStr: string, timezone: string): string => {
-        if (!dateStr) return 'N/A';
-        try {
-          // Parse date string (YYYY-MM-DD format from database)
-          const [year, month, day] = dateStr.split('-').map(Number);
-
-          // Create date at midday (12:00) UTC to avoid timezone edge cases
-          // This ensures the date stays correct regardless of timezone offset
-          const dateAtMidday = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-
-          // Format in user's timezone - using midday ensures date is always correct
-          return new Intl.DateTimeFormat('en-US', {
-            timeZone: timezone,
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-          }).format(dateAtMidday);
-        } catch (error) {
-          console.error('Error formatting date:', error);
-          return dateStr;
-        }
-      };
+      // Format calendar dates (YYYY-MM-DD) without timezone day shift
+      const formatDateInTimezone = (dateStr: string, timezone: string): string =>
+        formatDateOnlyLong(dateStr, timezone);
 
       const invoiceDateFormatted = formatDateInTimezone(invoice.invoice_date, userTimezone);
       const dueDateFormatted = formatDateInTimezone(invoice.due_date, userTimezone);

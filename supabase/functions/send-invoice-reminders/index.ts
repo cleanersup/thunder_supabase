@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
+import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -274,16 +275,9 @@ serve(async (req) => {
           const companyEmail = profile.company_email;
           const userTimezone = profile.timezone || 'America/New_York';
 
-          // Helper function to format dates in user's timezone
-          const formatDateInTimezone = (dateStr: string, timezone: string): string => {
-            const date = new Date(dateStr);
-            return new Intl.DateTimeFormat('en-US', {
-              year: 'numeric',
-              month: 'long',
-              day: 'numeric',
-              timeZone: timezone
-            }).format(date);
-          };
+          // Format calendar dates (YYYY-MM-DD) without timezone day shift
+          const formatDateInTimezone = (dateStr: string, timezone: string): string =>
+            formatDateOnlyLong(dateStr, timezone);
 
           const invoiceDateFormatted = formatDateInTimezone(invoice.invoice_date, userTimezone);
           const dueDateFormatted = formatDateInTimezone(invoice.due_date, userTimezone);

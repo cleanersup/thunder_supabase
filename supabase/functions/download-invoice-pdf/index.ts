@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.76.1';
 import * as Sentry from "npm:@sentry/deno";
 import { computeInvoiceAmountDue } from "../_shared/invoiceAmountDue.ts";
+import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -38,11 +39,8 @@ async function generateInvoicePDF(invoice: any, profile: any): Promise<Uint8Arra
   const lightGrey = [249, 250, 251]; // #f9fafb
   const borderGrey = [229, 231, 235]; // #e5e7eb
 
-  // Helper to format dates like email
-  const formatDate = (dateStr: string): string => {
-    const date = new Date(dateStr);
-    return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-  };
+  // Helper to format calendar dates without timezone day shift
+  const formatDate = (dateStr: string): string => formatDateOnlyLong(dateStr);
 
   // ===== HEADER (Dark Blue Banner) =====
   doc.setFillColor(darkBlue[0], darkBlue[1], darkBlue[2]);
