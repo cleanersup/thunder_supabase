@@ -4,6 +4,7 @@ import * as Sentry from "npm:@sentry/deno";
 import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
 import { computeInvoiceAmountDue } from "../_shared/invoiceAmountDue.ts";
 import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
+import { buildInvoiceTotalsSummaryHtml, calculateInvoiceTotals } from "../_shared/invoiceCalculations.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -229,8 +230,10 @@ serve(async (req) => {
 
       const invoiceDateFormatted = formatDateInTimezone(invoice.invoice_date, userTimezone);
       const dueDateFormatted = formatDateInTimezone(invoice.due_date, userTimezone);
-      const amountDue = computeInvoiceAmountDue(invoice);
       const f = (n: number) => `$${n.toFixed(2)}`;
+      const invoiceTotals = calculateInvoiceTotals(invoice);
+      const amountDue = computeInvoiceAmountDue(invoice);
+      const totalsSummaryHtml = buildInvoiceTotalsSummaryHtml(invoiceTotals, f);
 
       // ── Paid confirmation (client + merchant) — used by Stripe/manual flows via DB trigger or direct invoke
       if (isPaymentConfirmation) {
@@ -445,6 +448,8 @@ serve(async (req) => {
             </table>
             ` : ''}
             
+            ${totalsSummaryHtml}
+            
             ${invoice.notes ? `
             <!-- Notes -->
             <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px">
@@ -615,6 +620,8 @@ serve(async (req) => {
               </tr>
             </table>
             ` : ''}
+            
+            ${totalsSummaryHtml}
             
             <!-- Amount -->
             <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px">

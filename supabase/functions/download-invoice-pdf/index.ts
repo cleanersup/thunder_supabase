@@ -3,6 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.76.1';
 import * as Sentry from "npm:@sentry/deno";
 import { computeInvoiceAmountDue } from "../_shared/invoiceAmountDue.ts";
 import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
+import { calculateInvoiceTotals } from "../_shared/invoiceCalculations.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -203,6 +204,47 @@ async function generateInvoicePDF(invoice: any, profile: any): Promise<Uint8Arra
     yPosition += 10;
   }
 
+  const invoiceTotals = calculateInvoiceTotals(invoice);
+  const amountDue = computeInvoiceAmountDue(invoice);
+
+  // Totals breakdown (subtotal, discount, tax)
+  if (invoiceTotals.discountAmount > 0 || invoiceTotals.taxAmount > 0) {
+    if (yPosition > pageHeight - 60) {
+      doc.addPage();
+      yPosition = margin + 10;
+    }
+
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(darkGrey[0], darkGrey[1], darkGrey[2]);
+
+    const labelX = pageWidth - margin - 90;
+    const valueX = pageWidth - margin - 5;
+
+    doc.text("Subtotal:", labelX, yPosition);
+    doc.text(`$${formatCurrency(invoiceTotals.subtotal)}`, valueX, yPosition, { align: "right" });
+    yPosition += 8;
+
+    if (invoiceTotals.discountAmount > 0) {
+      const discountLabel = invoiceTotals.discountType === "percentage"
+        ? `Discount (${invoiceTotals.discountValue}%):`
+        : "Discount:";
+      doc.setTextColor(220, 38, 38);
+      doc.text(discountLabel, labelX, yPosition);
+      doc.text(`-$${formatCurrency(invoiceTotals.discountAmount)}`, valueX, yPosition, { align: "right" });
+      doc.setTextColor(darkGrey[0], darkGrey[1], darkGrey[2]);
+      yPosition += 8;
+    }
+
+    if (invoiceTotals.taxAmount > 0) {
+      doc.text(`Tax (${invoiceTotals.taxRate}%):`, labelX, yPosition);
+      doc.text(`$${formatCurrency(invoiceTotals.taxAmount)}`, valueX, yPosition, { align: "right" });
+      yPosition += 8;
+    }
+
+    yPosition += 4;
+  }
+
   // Amount Due Section
   doc.setFontSize(16);
   doc.setFont('helvetica', 'bold');
@@ -217,7 +259,6 @@ async function generateInvoicePDF(invoice: any, profile: any): Promise<Uint8Arra
   doc.setFontSize(20);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-  const amountDue = computeInvoiceAmountDue(invoice);
   doc.text('Total Amount Due:', margin + 10, yPosition + 4);
   doc.text(`$${formatCurrency(amountDue)}`, pageWidth - margin - 10, yPosition + 4, { align: 'right' });
   yPosition += 25;
