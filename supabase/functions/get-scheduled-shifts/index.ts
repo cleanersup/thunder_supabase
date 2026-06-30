@@ -1,49 +1,56 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.7.1';
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
 interface RequestBody {
   employeeId: string;
+  /** Optional. If provided, only shifts from this date onward are returned (YYYY-MM-DD).
+   *  Defaults to today (server UTC). */
+  from_date?: string;
+  /** Optional. If provided, only shifts up to and including this date are returned (YYYY-MM-DD).
+   *  Allows calendar screens to fetch past weeks/months. */
+  to_date?: string;
 }
 
 Deno.serve(async (req) => {
-  // Handle CORS preflight requests
-  if (req.method === 'OPTIONS') {
+  if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL');
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
     if (!supabaseUrl || !supabaseServiceKey) {
-      console.error('Missing environment variables');
+      console.error("Missing environment variables");
       return new Response(
-        JSON.stringify({ error: 'Server configuration error' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: "Server configuration error" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Parse request body
-    const { employeeId }: RequestBody = await req.json();
+    const { employeeId, from_date, to_date }: RequestBody = await req.json();
 
     if (!employeeId) {
       return new Response(
-        JSON.stringify({ error: 'Employee ID is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: "Employee ID is required" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    console.log('Fetching scheduled shifts for employee ID:', employeeId);
+    const today = new Date().toISOString().split("T")[0];
+    const startDate = from_date || today;
 
-    // Get all scheduled route appointments
-    const { data: appointments, error: appointmentsError } = await supabase
-      .from('route_appointments')
+    console.log(`Fetching shifts for employee ${employeeId} from ${startDate}${to_date ? ` to ${to_date}` : " onward"}`);
+
+    // ── SOURCE 1: route_appointments ──────────────────────────────────────────
+    let apptQuery = supabase
+      .from("route_appointments")
       .select(`
         id,
         scheduled_date,
@@ -63,117 +70,202 @@ Deno.serve(async (req) => {
           service_zip
         )
       `)
-      .gte('scheduled_date', new Date().toISOString().split('T')[0])
-      .order('scheduled_date', { ascending: true });
+      .gte("scheduled_date", startDate)
+      .order("scheduled_date", { ascending: true });
+
+    if (to_date) {
+      apptQuery = apptQuery.lte("scheduled_date", to_date);
+    }
+
+    const { data: appointments, error: appointmentsError } = await apptQuery;
 
     if (appointmentsError) {
-      console.error('Error fetching appointments:', appointmentsError);
+      console.error("Error fetching appointments:", appointmentsError);
       return new Response(
-        JSON.stringify({ error: 'Failed to fetch scheduled shifts' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: "Failed to fetch scheduled shifts" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    console.log(`Total appointments found: ${appointments?.length || 0}`);
-
-    // Filter appointments where assigned_employees contains the employeeId
-    const filteredAppointments = appointments?.filter(appointment => {
-      const assignedEmployees = appointment.assigned_employees || [];
-      // assigned_employees can be either array of strings or array of objects {id, name}
-      return assignedEmployees.some((emp: any) => {
-        // Handle both formats: string ID or object with id property
-        const empId = typeof emp === 'string' ? emp : emp.id;
-        return empId === employeeId;
-      });
-    }) || [];
-
-    console.log(`Filtered shifts for employee: ${filteredAppointments.length}`);
-
-    // Collect all unique employee IDs from filtered appointments
-    const employeeIds = new Set<string>();
-    filteredAppointments.forEach(appointment => {
-      const assignedEmployees = appointment.assigned_employees || [];
-      assignedEmployees.forEach((emp: any) => {
-        const empId = typeof emp === 'string' ? emp : emp.id;
-        if (empId) employeeIds.add(empId);
+    // Filter appointments assigned to this employee
+    const filteredAppointments = (appointments ?? []).filter((appt) => {
+      const assigned = appt.assigned_employees || [];
+      return assigned.some((emp: unknown) => {
+        const id = typeof emp === "string" ? emp : (emp as { id: string }).id;
+        return id === employeeId;
       });
     });
 
-    // Fetch employee names from the employees table
-    const employeeIdsArray = Array.from(employeeIds);
-    const { data: employeesData, error: employeesError } = await supabase
-      .from('employees')
-      .select('id, first_name, last_name')
-      .in('id', employeeIdsArray);
+    // ── SOURCE 2: jobs ────────────────────────────────────────────────────────
+    // Jobs store assigned_employees as [{id, name, ...}] JSONB.
+    // We pull upcoming/today/ongoing jobs and filter by employee in memory
+    // (same pattern as appointments — no JSON operator needed).
+    let jobsQuery = supabase
+      .from("jobs")
+      .select(`
+        id,
+        job_number,
+        scheduled_date,
+        start_time,
+        end_time,
+        service_type,
+        service_details,
+        assigned_employees,
+        internal_notes,
+        status,
+        client_id,
+        client_name,
+        property_street,
+        property_apt,
+        property_city,
+        property_state,
+        property_zip,
+        site_latitude,
+        site_longitude,
+        geofence_radius_meters
+      `)
+      .gte("scheduled_date", startDate)
+      .not("status", "in", '("draft","cancelled")')
+      .order("scheduled_date", { ascending: true });
 
-    if (employeesError) {
-      console.error('Error fetching employee data:', employeesError);
+    if (to_date) {
+      jobsQuery = jobsQuery.lte("scheduled_date", to_date);
     }
 
-    // Create a map of employee ID to full name
+    const { data: jobs, error: jobsError } = await jobsQuery;
+
+    if (jobsError) {
+      console.error("Error fetching jobs:", jobsError);
+      // Non-fatal: fall back to appointments only
+    }
+
+    const filteredJobs = (jobs ?? []).filter((job) => {
+      const assigned = (job.assigned_employees as unknown[]) || [];
+      return assigned.some((emp: unknown) => {
+        if (typeof emp === "string") return emp === employeeId;
+        if (typeof emp === "object" && emp !== null) {
+          return (emp as { id: string }).id === employeeId;
+        }
+        return false;
+      });
+    });
+
+    // ── Collect all unique employee IDs (both sources) ────────────────────────
+    const employeeIds = new Set<string>();
+
+    for (const appt of filteredAppointments) {
+      for (const emp of (appt.assigned_employees || []) as unknown[]) {
+        const id = typeof emp === "string" ? emp : (emp as { id: string }).id;
+        if (id) employeeIds.add(id);
+      }
+    }
+    for (const job of filteredJobs) {
+      for (const emp of ((job.assigned_employees as unknown[]) || [])) {
+        const id = typeof emp === "string" ? emp : (emp as { id: string }).id;
+        if (id) employeeIds.add(id);
+      }
+    }
+
+    // ── Fetch employee names once ─────────────────────────────────────────────
     const employeeNameMap = new Map<string, string>();
-    if (employeesData) {
-      employeesData.forEach(emp => {
-        employeeNameMap.set(emp.id, `${emp.first_name} ${emp.last_name}`);
+    const idsArray = Array.from(employeeIds);
+    if (idsArray.length > 0) {
+      const { data: empData } = await supabase
+        .from("employees")
+        .select("id, first_name, last_name")
+        .in("id", idsArray);
+
+      if (empData) {
+        for (const emp of empData) {
+          employeeNameMap.set(emp.id, `${emp.first_name} ${emp.last_name}`);
+        }
+      }
+    }
+
+    function normalizeEmployees(raw: unknown[]): { id: string; name: string }[] {
+      return raw.map((emp) => {
+        const id = typeof emp === "string" ? emp : (emp as { id: string }).id;
+        const fallbackName = typeof emp === "object" && emp !== null
+          ? (emp as { name?: string }).name ?? "Employee"
+          : "Employee";
+        return { id, name: employeeNameMap.get(id) ?? fallbackName };
       });
     }
 
-    console.log('Employee name map:', Object.fromEntries(employeeNameMap));
-
-    // Transform data to required format
-    const shifts = filteredAppointments.map(appointment => {
-      const client = Array.isArray(appointment.clients) 
-        ? appointment.clients[0] 
-        : appointment.clients;
-      
-      const address = client 
-        ? `${client.service_street}${client.service_apt ? ' ' + client.service_apt : ''}, ${client.service_city}, ${client.service_state} ${client.service_zip}`
-        : 'Address not available';
-
-      // Normalize assigned_employees to always be objects {id, name} with real names
-      const assignedEmployees = (appointment.assigned_employees || []).map((emp: any) => {
-        const empId = typeof emp === 'string' ? emp : emp.id;
-        const empName = employeeNameMap.get(empId) || (typeof emp === 'object' ? emp.name : null) || 'Employee';
-        return { id: empId, name: empName };
-      });
+    // ── Transform appointments ────────────────────────────────────────────────
+    const appointmentShifts = filteredAppointments.map((appt) => {
+      const client = Array.isArray(appt.clients) ? appt.clients[0] : appt.clients;
+      const address = client
+        ? `${client.service_street}${client.service_apt ? " " + client.service_apt : ""}, ${client.service_city}, ${client.service_state} ${client.service_zip}`
+        : "Address not available";
 
       return {
-        id: appointment.id,
-        date: appointment.scheduled_date,
-        start_time: appointment.scheduled_time,
-        end_time: appointment.end_time,
+        id: appt.id,
+        source: "appointment" as const,
+        job_number: null,
+        date: appt.scheduled_date,
+        start_time: appt.scheduled_time,
+        end_time: appt.end_time,
         location: address,
-        client_name: client?.full_name || 'Unknown Client',
-        service_type: appointment.service_type || 'General Service',
-        cleaning_type: appointment.cleaning_type,
-        assigned_employees: assignedEmployees,
-        instructions: appointment.notes || '',
-        status: appointment.status
+        client_name: client?.full_name ?? "Unknown Client",
+        service_type: appt.service_type ?? "General Service",
+        cleaning_type: appt.cleaning_type ?? null,
+        assigned_employees: normalizeEmployees(appt.assigned_employees || []),
+        instructions: appt.notes ?? "",
+        status: appt.status,
+        site_latitude: null,
+        site_longitude: null,
+        geofence_radius_meters: null,
       };
     });
 
-    console.log(`Returning ${shifts.length} shifts to client`);
-    
-    // Log the actual structure being returned for debugging
-    if (shifts.length > 0) {
-      console.log('Sample shift structure:', JSON.stringify(shifts[0], null, 2));
-      console.log('assigned_employees type:', typeof shifts[0].assigned_employees);
-      console.log('assigned_employees sample:', JSON.stringify(shifts[0].assigned_employees));
-    }
+    // ── Transform jobs ────────────────────────────────────────────────────────
+    const jobShifts = filteredJobs.map((job) => {
+      const parts = [job.property_street];
+      if (job.property_apt) parts.push(job.property_apt);
+      if (job.property_city) parts.push(`${job.property_city}, ${job.property_state} ${job.property_zip}`);
+      const address = parts.join(" ") || "Address not available";
+
+      return {
+        id: job.id,
+        source: "job" as const,
+        job_number: job.job_number ?? null,
+        date: job.scheduled_date,
+        start_time: job.start_time ?? null,
+        end_time: job.end_time ?? null,
+        location: address,
+        client_name: job.client_name ?? "Unknown Client",
+        service_type: job.service_type ?? "General Service",
+        cleaning_type: null,
+        assigned_employees: normalizeEmployees((job.assigned_employees as unknown[]) || []),
+        instructions: job.internal_notes ?? "",
+        status: job.status,
+        site_latitude: job.site_latitude ?? null,
+        site_longitude: job.site_longitude ?? null,
+        geofence_radius_meters: job.geofence_radius_meters ?? 200,
+      };
+    });
+
+    // ── Merge & sort by date then start_time ──────────────────────────────────
+    const allShifts = [...appointmentShifts, ...jobShifts].sort((a, b) => {
+      const dateCmp = a.date.localeCompare(b.date);
+      if (dateCmp !== 0) return dateCmp;
+      const aTime = a.start_time ?? "";
+      const bTime = b.start_time ?? "";
+      return aTime.localeCompare(bTime);
+    });
+
+    console.log(`Returning ${allShifts.length} shifts (${appointmentShifts.length} appointments + ${jobShifts.length} jobs)`);
 
     return new Response(
-      JSON.stringify({
-        success: true,
-        shifts: shifts
-      }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ success: true, shifts: allShifts }),
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
-
   } catch (error) {
-    console.error('Error in get-scheduled-shifts function:', error);
+    console.error("Error in get-scheduled-shifts:", error);
     return new Response(
-      JSON.stringify({ error: 'Internal server error' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ error: "Internal server error" }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
 });
