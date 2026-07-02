@@ -100,16 +100,23 @@ serve(async (req) => {
       );
 
       // ── Idempotency check ───────────────────────────────────────────────────
-      // If client_action_id is present and was already processed, return the
-      // existing time_entry immediately without touching the DB again.
+      // Look up client_action_id in the action log (not in time_entries).
+      // Each action type has its own log row, so clock_in and clock_out are
+      // independently idempotent even though they share a time_entries row.
       if (client_action_id) {
-        const { data: existing } = await supabase
-          .from("time_entries")
-          .select("*")
+        const { data: logEntry } = await supabase
+          .from("time_entry_action_log")
+          .select("time_entry_id")
           .eq("client_action_id", client_action_id)
           .maybeSingle();
 
-        if (existing) {
+        if (logEntry) {
+          const { data: cachedEntry } = await supabase
+            .from("time_entries")
+            .select("*")
+            .eq("id", logEntry.time_entry_id)
+            .maybeSingle();
+
           console.log(`Duplicate client_action_id detected: ${client_action_id} — returning cached result`);
           return new Response(
             JSON.stringify({
@@ -117,7 +124,7 @@ serve(async (req) => {
               action,
               duplicate: true,
               employee: { id: employee_id },
-              time_entry: existing,
+              time_entry: cachedEntry,
             }),
             { headers: { ...corsHeaders, "Content-Type": "application/json" } },
           );
@@ -254,7 +261,6 @@ serve(async (req) => {
             notes: notes ?? existingEntry?.notes ?? null,
             clock_in_latitude: latitude ?? existingEntry?.clock_in_latitude ?? null,
             clock_in_longitude: longitude ?? existingEntry?.clock_in_longitude ?? null,
-            ...(client_action_id ? { client_action_id } : {}),
           };
 
           if (existingEntry) {
@@ -269,20 +275,25 @@ serve(async (req) => {
           } else {
             const { data, error } = await supabase
               .from("time_entries")
-              .insert({
-                employee_id,
-                user_id: employee.user_id,
-                date: today,
-                ...clockInFields,
-              })
+              .insert({ employee_id, user_id: employee.user_id, date: today, ...clockInFields })
               .select()
               .single();
             if (error) throw error;
             timeEntry = data;
           }
 
-          console.log(`Clock-in for employee ${employee_id}, entry ${timeEntry.id}`);
+          // Log action for idempotency (fire-and-forget — non-fatal if it fails)
+          if (client_action_id) {
+            supabase.from("time_entry_action_log").insert({
+              client_action_id,
+              time_entry_id: timeEntry.id,
+              employee_id,
+              action: "clock_in",
+              event_time: now,
+            }).catch((e: unknown) => console.error("Failed to write action log (clock_in):", e));
+          }
 
+          console.log(`Clock-in for employee ${employee_id}, entry ${timeEntry.id}`);
           supabase.functions.invoke("send-clock-notifications", {
             body: { timeEntryId: timeEntry.id, eventType: "clock_in" },
           }).catch((err) => console.error("Error sending clock-in notifications:", err));
@@ -313,7 +324,6 @@ serve(async (req) => {
               notes: notes ?? existingEntry.notes,
               clock_out_latitude: latitude ?? null,
               clock_out_longitude: longitude ?? null,
-              ...(client_action_id ? { client_action_id } : {}),
             })
             .eq("id", existingEntry.id)
             .select()
@@ -321,8 +331,18 @@ serve(async (req) => {
 
           if (error) throw error;
           timeEntry = data;
-          console.log(`Clock-out for employee ${employee_id}`);
 
+          if (client_action_id) {
+            supabase.from("time_entry_action_log").insert({
+              client_action_id,
+              time_entry_id: timeEntry.id,
+              employee_id,
+              action: "clock_out",
+              event_time: now,
+            }).catch((e: unknown) => console.error("Failed to write action log (clock_out):", e));
+          }
+
+          console.log(`Clock-out for employee ${employee_id}`);
           supabase.functions.invoke("send-clock-notifications", {
             body: { timeEntryId: timeEntry.id, eventType: "clock_out" },
           }).catch((err) => console.error("Error sending clock-out notifications:", err));
@@ -351,7 +371,6 @@ serve(async (req) => {
               break_end_time: null,
               status: "on_break",
               notes: notes ?? existingEntry.notes,
-              ...(client_action_id ? { client_action_id } : {}),
             })
             .eq("id", existingEntry.id)
             .select()
@@ -359,6 +378,17 @@ serve(async (req) => {
 
           if (error) throw error;
           timeEntry = data;
+
+          if (client_action_id) {
+            supabase.from("time_entry_action_log").insert({
+              client_action_id,
+              time_entry_id: timeEntry.id,
+              employee_id,
+              action: "break_start",
+              event_time: now,
+            }).catch((e: unknown) => console.error("Failed to write action log (break_start):", e));
+          }
+
           console.log(`Break started for employee ${employee_id}`);
           break;
         }
@@ -384,7 +414,6 @@ serve(async (req) => {
               break_end_time: now,
               status: "in_progress",
               notes: notes ?? existingEntry.notes,
-              ...(client_action_id ? { client_action_id } : {}),
             })
             .eq("id", existingEntry.id)
             .select()
@@ -392,6 +421,17 @@ serve(async (req) => {
 
           if (error) throw error;
           timeEntry = data;
+
+          if (client_action_id) {
+            supabase.from("time_entry_action_log").insert({
+              client_action_id,
+              time_entry_id: timeEntry.id,
+              employee_id,
+              action: "break_end",
+              event_time: now,
+            }).catch((e: unknown) => console.error("Failed to write action log (break_end):", e));
+          }
+
           console.log(`Break ended for employee ${employee_id}`);
           break;
         }
