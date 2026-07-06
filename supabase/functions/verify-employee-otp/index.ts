@@ -139,7 +139,7 @@ const handler = async (req: Request): Promise<Response> => {
       // Get employee data
       const { data: employee, error: employeeError } = await supabase
         .from('employees')
-        .select('id, first_name, last_name, phone, email, position, status, hourly_pay, address, user_id')
+        .select('id, first_name, last_name, phone, email, position, status, hourly_pay, address, user_id, activated_at')
         .eq('id', otpRecord.employee_id)
         .single();
 
@@ -149,6 +149,25 @@ const handler = async (req: Request): Promise<Response> => {
           JSON.stringify({ error: 'Employee not found' }),
           { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
+      }
+
+      // Mark the employee as activated the first time they log in (system-set, once).
+      // This is separate from employees.status (managed by the owner).
+      let activatedAt = employee.activated_at as string | null;
+      if (!activatedAt) {
+        activatedAt = new Date().toISOString();
+        const { error: activationError } = await supabase
+          .from('employees')
+          .update({ activated_at: activatedAt })
+          .eq('id', employee.id)
+          .is('activated_at', null);
+
+        if (activationError) {
+          console.error('Failed to set activated_at (non-fatal):', activationError);
+          activatedAt = employee.activated_at as string | null;
+        } else {
+          console.log(`Employee ${employee.id} activated at ${activatedAt}`);
+        }
       }
 
       Sentry.setUser({ id: employee.id, email: employee.email || undefined });
@@ -168,7 +187,8 @@ const handler = async (req: Request): Promise<Response> => {
             status: employee.status,
             hourlyPay: employee.hourly_pay,
             address: employee.address,
-            userId: employee.user_id
+            userId: employee.user_id,
+            activatedAt: activatedAt
           }
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

@@ -190,3 +190,15 @@ verify_jwt = true
 
 [functions.public-invoice-payment-profile]
 verify_jwt = false
+
+[functions.send-employee-welcome-email]
+verify_jwt = false
+
+[functions.send-push-notification]
+verify_jwt = false
+
+[functions.notify-job-employees]
+verify_jwt = false
+
+[functions.resend-employee-invitation]
+verify_jwt = false

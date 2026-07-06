@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.76.1';
 import { toZonedTime, fromZonedTime } from 'https://esm.sh/date-fns-tz@3.2.0';
+import { sendPushToEmployees } from "../_shared/fcm.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -500,6 +501,19 @@ const handler = async (req: Request): Promise<Response> => {
               }
             }
 
+            // Push-notify assigned employees (best-effort).
+            if (employeeIds.length > 0) {
+              try {
+                await sendPushToEmployees(supabaseClient, employeeIds, {
+                  title: 'Service reminder (tomorrow)',
+                  body: `${client.full_name || 'A client'} · ${formatTime(appointment.scheduled_time)} · ${appointment.service_type || 'Service'}`,
+                  data: { type: 'appointment_reminder', appointment_id: appointment.id },
+                });
+              } catch (e) {
+                console.error('Push 24h reminder failed:', e);
+              }
+            }
+
             // Mark as sent
             await supabaseClient
               .from('appointment_reminders_sent')
@@ -570,6 +584,19 @@ const handler = async (req: Request): Promise<Response> => {
                 'We\'re On Our Way!',
                 generate1hReminderEmail(appointment, client, employees, companyInfo || {}, false, userTimezone)
               );
+            }
+
+            // Push-notify assigned employees (best-effort).
+            if (employeeIds.length > 0) {
+              try {
+                await sendPushToEmployees(supabaseClient, employeeIds, {
+                  title: 'Service starting soon',
+                  body: `${client.full_name || 'A client'} · ${formatTime(appointment.scheduled_time)} · starts in ~1 hour`,
+                  data: { type: 'appointment_reminder', appointment_id: appointment.id },
+                });
+              } catch (e) {
+                console.error('Push 1h reminder failed:', e);
+              }
             }
 
             // Mark as sent

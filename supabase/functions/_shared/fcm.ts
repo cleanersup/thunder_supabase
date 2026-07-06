@@ -1,0 +1,238 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Firebase Cloud Messaging (HTTP v1) helper.
+//
+// Unified push path for iOS and Android. Reads a Google service-account JSON
+// from the FCM_SERVICE_ACCOUNT_JSON secret, mints a short-lived OAuth2 access
+// token (RS256-signed JWT), and sends notifications via the FCM v1 API.
+//
+// Tokens that FCM reports as UNREGISTERED / invalid are returned to the caller
+// so they can be marked is_active = false in employee_device_tokens.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+export interface PushMessage {
+  title: string;
+  body: string;
+  /** Optional key/value data payload. All values must be strings for FCM. */
+  data?: Record<string, string>;
+}
+
+interface ServiceAccount {
+  client_email: string;
+  private_key: string;
+  token_uri?: string;
+  project_id: string;
+}
+
+// Module-level cache for the OAuth2 access token (valid ~1 hour).
+let cachedAccessToken: string | null = null;
+let cachedTokenExpiresAt = 0;
+
+function loadServiceAccount(): ServiceAccount {
+  const raw = Deno.env.get("FCM_SERVICE_ACCOUNT_JSON");
+  if (!raw) {
+    throw new Error("FCM_SERVICE_ACCOUNT_JSON secret is not configured");
+  }
+  let parsed: ServiceAccount;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("FCM_SERVICE_ACCOUNT_JSON is not valid JSON");
+  }
+  if (!parsed.client_email || !parsed.private_key || !parsed.project_id) {
+    throw new Error("FCM_SERVICE_ACCOUNT_JSON is missing required fields");
+  }
+  return parsed;
+}
+
+// ── Base64url helpers ─────────────────────────────────────────────────────────
+function base64urlEncode(input: string | Uint8Array): string {
+  const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function pemToPkcs8(pem: string): ArrayBuffer {
+  const b64 = pem
+    .replace(/-----BEGIN PRIVATE KEY-----/, "")
+    .replace(/-----END PRIVATE KEY-----/, "")
+    .replace(/\s/g, "");
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+// ── Mint (and cache) an OAuth2 access token via signed JWT ─────────────────────
+async function getAccessToken(sa: ServiceAccount): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  // Reuse cached token if it still has >60s of life.
+  if (cachedAccessToken && now < cachedTokenExpiresAt - 60) {
+    return cachedAccessToken;
+  }
+
+  const tokenUri = sa.token_uri || "https://oauth2.googleapis.com/token";
+  const header = { alg: "RS256", typ: "JWT" };
+  const claims = {
+    iss: sa.client_email,
+    scope: "https://www.googleapis.com/auth/firebase.messaging",
+    aud: tokenUri,
+    iat: now,
+    exp: now + 3600,
+  };
+
+  const unsigned = `${base64urlEncode(JSON.stringify(header))}.${base64urlEncode(JSON.stringify(claims))}`;
+
+  const key = await crypto.subtle.importKey(
+    "pkcs8",
+    pemToPkcs8(sa.private_key),
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+
+  const signature = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    key,
+    new TextEncoder().encode(unsigned),
+  );
+
+  const jwt = `${unsigned}.${base64urlEncode(new Uint8Array(signature))}`;
+
+  const resp = await fetch(tokenUri, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: jwt,
+    }),
+  });
+
+  const json = await resp.json();
+  if (!resp.ok || !json.access_token) {
+    throw new Error(`Failed to obtain FCM access token: ${JSON.stringify(json)}`);
+  }
+
+  cachedAccessToken = json.access_token as string;
+  cachedTokenExpiresAt = now + (json.expires_in ?? 3600);
+  return cachedAccessToken;
+}
+
+// ── Send to a set of raw tokens ───────────────────────────────────────────────
+export interface SendResult {
+  successCount: number;
+  /** Tokens FCM reported as permanently invalid (should be deactivated). */
+  invalidTokens: string[];
+}
+
+export async function sendFcmToTokens(
+  tokens: string[],
+  message: PushMessage,
+): Promise<SendResult> {
+  const result: SendResult = { successCount: 0, invalidTokens: [] };
+  if (tokens.length === 0) return result;
+
+  const sa = loadServiceAccount();
+  const accessToken = await getAccessToken(sa);
+  const endpoint = `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`;
+
+  await Promise.all(
+    tokens.map(async (token) => {
+      try {
+        const resp = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            message: {
+              token,
+              notification: { title: message.title, body: message.body },
+              ...(message.data ? { data: message.data } : {}),
+            },
+          }),
+        });
+
+        if (resp.ok) {
+          result.successCount++;
+          return;
+        }
+
+        const err = await resp.json().catch(() => ({}));
+        const status = err?.error?.status ?? "";
+        // UNREGISTERED = token no longer valid; INVALID_ARGUMENT on the token = malformed.
+        if (status === "UNREGISTERED" || status === "NOT_FOUND" || resp.status === 404) {
+          result.invalidTokens.push(token);
+        }
+        console.error(`FCM send failed (${resp.status} ${status}) for token ${token.slice(0, 12)}…`);
+      } catch (e) {
+        console.error("FCM send exception:", e);
+      }
+    }),
+  );
+
+  return result;
+}
+
+// ── Send to one or more employees (reads their active tokens) ─────────────────
+export interface EmployeePushResult {
+  /** Employee IDs that had at least one active token AND got a successful send. */
+  notifiedEmployeeIds: string[];
+  /** Employee IDs with no active push token (caller may fall back to SMS). */
+  employeesWithoutToken: string[];
+}
+
+export async function sendPushToEmployees(
+  supabase: SupabaseClient,
+  employeeIds: string[],
+  message: PushMessage,
+): Promise<EmployeePushResult> {
+  const out: EmployeePushResult = { notifiedEmployeeIds: [], employeesWithoutToken: [] };
+  if (employeeIds.length === 0) return out;
+
+  const { data: tokenRows } = await supabase
+    .from("employee_device_tokens")
+    .select("id, employee_id, token")
+    .in("employee_id", employeeIds)
+    .eq("is_active", true);
+
+  const tokensByEmployee = new Map<string, string[]>();
+  for (const row of (tokenRows ?? []) as { employee_id: string; token: string }[]) {
+    const list = tokensByEmployee.get(row.employee_id) ?? [];
+    list.push(row.token);
+    tokensByEmployee.set(row.employee_id, list);
+  }
+
+  const allInvalidTokens: string[] = [];
+
+  for (const employeeId of employeeIds) {
+    const tokens = tokensByEmployee.get(employeeId);
+    if (!tokens || tokens.length === 0) {
+      out.employeesWithoutToken.push(employeeId);
+      continue;
+    }
+
+    const res = await sendFcmToTokens(tokens, message);
+    allInvalidTokens.push(...res.invalidTokens);
+
+    // Consider the employee notified if any token succeeded; otherwise fall back.
+    if (res.successCount > 0) {
+      out.notifiedEmployeeIds.push(employeeId);
+    } else {
+      out.employeesWithoutToken.push(employeeId);
+    }
+  }
+
+  // Deactivate tokens FCM reported as invalid.
+  if (allInvalidTokens.length > 0) {
+    await supabase
+      .from("employee_device_tokens")
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .in("token", allInvalidTokens);
+  }
+
+  return out;
+}

@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import * as Sentry from "npm:@sentry/deno";
+import { sendPushToEmployees } from "../_shared/fcm.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -240,6 +241,19 @@ async function processJobReminder(
       if (!employee.email) continue;
       const mail = buildEmployeeReminderEmail(job, employee, companyName, reminderType, timezone);
       await sendEmailViaSMTP(employee.email, mail.subject, mail.html);
+    }
+
+    // Also push-notify assigned employees (best-effort; email is still the record of truth).
+    try {
+      const whenLabel = reminderType === "reminder_24h" ? "tomorrow" : "today";
+      const schedule = `${formatDate(job.scheduled_date, timezone)} at ${formatTime(job.start_time)}`;
+      await sendPushToEmployees(supabase, employeeIds, {
+        title: `Job reminder (${whenLabel})`,
+        body: `${job.job_number ? `Job ${job.job_number}` : "You have a job"} ${whenLabel}: ${schedule}.`,
+        data: { type: "job_reminder", job_id: job.id },
+      });
+    } catch (e) {
+      console.error(`Push reminder failed for job ${job.id}:`, e);
     }
   }
 

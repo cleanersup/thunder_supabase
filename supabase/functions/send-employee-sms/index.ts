@@ -148,10 +148,10 @@ const handler = async (req: Request): Promise<Response> => {
 
     // Prepare SMS message with company name
     console.log("=== PREPARING SMS MESSAGE ===");
-    const appUrl = Deno.env.get("PUBLIC_APP_URL") || Deno.env.get("APP_URL") || "https://app.staging.thunderpro.co";
-    const dashboardUrl = `${appUrl}/employee/login`;
-    console.log("Dashboard URL:", dashboardUrl);
-    const message = `Hi ${employee.first_name}! Welcome to the ${companyName} team. Access your employee dashboard here: ${dashboardUrl}\n\nYou can clock in/out and manage your time from this link.`;
+    // Link to the employee mobile app download (TestFlight/Play test link for now).
+    const downloadUrl = Deno.env.get("EMPLOYEE_APP_DOWNLOAD_URL") || "https://app.staging.thunderpro.co/employee/login";
+    console.log("Download URL:", downloadUrl);
+    const message = `Hi ${employee.first_name}! Welcome to the ${companyName} team. Download the Thunder Pro employee app here: ${downloadUrl}\n\nSign in with this phone number to see your schedule and clock in/out.`;
 
     console.log("Message preview:", message.substring(0, 100) + "...");
     console.log("Message length:", message.length, "characters");
