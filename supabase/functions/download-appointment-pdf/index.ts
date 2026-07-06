@@ -257,8 +257,8 @@ async function generateAppointmentPDF(
     doc.setFont('helvetica', 'bold');
     doc.text('Clock In/Out & View Details', pageWidth / 2, buttonY + 9, { align: 'center' });
 
-    // Add clickable link to the button area (dynamic based on environment)
-    const employeeLoginUrl = `${appBaseUrl}/employee/login`;
+    // Add clickable link to the button area — points to the employee app (thundercrew).
+    const employeeLoginUrl = Deno.env.get("EMPLOYEE_APP_DOWNLOAD_URL") || `${appBaseUrl}/employee/login`;
     doc.link(buttonX, buttonY, buttonWidth, buttonHeight, { url: employeeLoginUrl });
 
     // Small text below button

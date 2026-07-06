@@ -202,3 +202,18 @@ verify_jwt = false
 
 [functions.resend-employee-invitation]
 verify_jwt = false
+
+[functions.register-device-token]
+verify_jwt = false
+
+[functions.upload-shift-photo]
+verify_jwt = false
+
+[functions.get-shift-photos]
+verify_jwt = false
+
+[functions.notify-user-push]
+verify_jwt = false
+
+[functions.register-user-device-token]
+verify_jwt = true

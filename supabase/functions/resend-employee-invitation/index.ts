@@ -124,6 +124,13 @@ serve(async (req) => {
         success: true,
         sms: employee.phone ? (smsResult.ok ? "sent" : "failed") : "skipped",
         email: employee.email ? (emailResult.ok ? "sent" : "failed") : "skipped",
+        // Surface the underlying reason so failures are debuggable from the client.
+        smsDetail: employee.phone && !smsResult.ok
+          ? { status: smsResult.status, body: smsResult.body }
+          : undefined,
+        emailDetail: employee.email && !emailResult.ok
+          ? { status: emailResult.status, body: emailResult.body }
+          : undefined,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );

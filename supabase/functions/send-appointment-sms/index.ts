@@ -247,8 +247,8 @@ serve(async (req) => {
                     appointment.cleaning_type ? `(${appointment.cleaning_type})` : null
                 ].filter(Boolean).join(' ');
 
-                // Employee login URL for clock in/out (dynamic based on environment)
-                const employeeLoginUrl = `${publicAppUrl}/employee/login`;
+                // Employee login URL for clock in/out — points to the employee app (thundercrew).
+                const employeeLoginUrl = Deno.env.get("EMPLOYEE_APP_DOWNLOAD_URL") || `${publicAppUrl}/employee/login`;
 
                 // Build structured message for employee
                 let employeeMessage = isUpdate

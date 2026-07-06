@@ -34,9 +34,22 @@ function loadServiceAccount(): ServiceAccount {
   if (!raw) {
     throw new Error("FCM_SERVICE_ACCOUNT_JSON secret is not configured");
   }
+
+  // Accept either raw JSON ({...}) or a base64-encoded JSON blob (easier to
+  // store in a .env file, since the private key spans multiple lines).
+  const trimmed = raw.trim();
+  let jsonText = trimmed;
+  if (!trimmed.startsWith("{")) {
+    try {
+      jsonText = atob(trimmed);
+    } catch {
+      throw new Error("FCM_SERVICE_ACCOUNT_JSON is neither JSON nor valid base64");
+    }
+  }
+
   let parsed: ServiceAccount;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(jsonText);
   } catch {
     throw new Error("FCM_SERVICE_ACCOUNT_JSON is not valid JSON");
   }
@@ -198,38 +211,75 @@ export async function sendPushToEmployees(
     .select("id, employee_id, token")
     .in("employee_id", employeeIds)
     .eq("is_active", true);
+  return await deliverGrouped(supabase, employeeIds, tokenRows, "employee_id", message, out);
+}
 
-  const tokensByEmployee = new Map<string, string[]>();
-  for (const row of (tokenRows ?? []) as { employee_id: string; token: string }[]) {
-    const list = tokensByEmployee.get(row.employee_id) ?? [];
+// ── Send to one or more owners / auth users (reads their active tokens) ────────
+export interface UserPushResult {
+  notifiedUserIds: string[];
+  usersWithoutToken: string[];
+}
+
+export async function sendPushToUsers(
+  supabase: SupabaseClient,
+  userIds: string[],
+  message: PushMessage,
+): Promise<UserPushResult> {
+  const out = { notifiedEmployeeIds: [], employeesWithoutToken: [] } as EmployeePushResult;
+  if (userIds.length === 0) return { notifiedUserIds: [], usersWithoutToken: [] };
+
+  const { data: tokenRows } = await supabase
+    .from("user_device_tokens")
+    .select("id, user_id, token")
+    .in("user_id", userIds)
+    .eq("is_active", true);
+
+  const result = await deliverGrouped(supabase, userIds, tokenRows, "user_id", message, out, "user_device_tokens");
+  return { notifiedUserIds: result.notifiedEmployeeIds, usersWithoutToken: result.employeesWithoutToken };
+}
+
+// Shared delivery routine for a set of entity IDs and their token rows.
+async function deliverGrouped(
+  supabase: SupabaseClient,
+  ids: string[],
+  tokenRows: unknown,
+  idKey: "employee_id" | "user_id",
+  message: PushMessage,
+  out: EmployeePushResult,
+  tokenTable: "employee_device_tokens" | "user_device_tokens" = "employee_device_tokens",
+): Promise<EmployeePushResult> {
+  const tokensById = new Map<string, string[]>();
+  for (const row of (tokenRows ?? []) as Record<string, string>[]) {
+    const entityId = row[idKey];
+    const list = tokensById.get(entityId) ?? [];
     list.push(row.token);
-    tokensByEmployee.set(row.employee_id, list);
+    tokensById.set(entityId, list);
   }
 
   const allInvalidTokens: string[] = [];
 
-  for (const employeeId of employeeIds) {
-    const tokens = tokensByEmployee.get(employeeId);
+  for (const id of ids) {
+    const tokens = tokensById.get(id);
     if (!tokens || tokens.length === 0) {
-      out.employeesWithoutToken.push(employeeId);
+      out.employeesWithoutToken.push(id);
       continue;
     }
 
     const res = await sendFcmToTokens(tokens, message);
     allInvalidTokens.push(...res.invalidTokens);
 
-    // Consider the employee notified if any token succeeded; otherwise fall back.
+    // Consider the entity notified if any token succeeded; otherwise fall back.
     if (res.successCount > 0) {
-      out.notifiedEmployeeIds.push(employeeId);
+      out.notifiedEmployeeIds.push(id);
     } else {
-      out.employeesWithoutToken.push(employeeId);
+      out.employeesWithoutToken.push(id);
     }
   }
 
   // Deactivate tokens FCM reported as invalid.
   if (allInvalidTokens.length > 0) {
     await supabase
-      .from("employee_device_tokens")
+      .from(tokenTable)
       .update({ is_active: false, updated_at: new Date().toISOString() })
       .in("token", allInvalidTokens);
   }

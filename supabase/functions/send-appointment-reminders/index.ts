@@ -10,6 +10,8 @@ const corsHeaders = {
 
 // Get app URL from environment variables
 const publicAppUrl = Deno.env.get("PUBLIC_APP_URL") || Deno.env.get("APP_URL") || "https://app.staging.thunderpro.co";
+// Employee clock-in link points to the employee app (thundercrew), not the owner web app.
+const employeeAppUrl = Deno.env.get("EMPLOYEE_APP_DOWNLOAD_URL") || `${publicAppUrl}/employee/login`;
 
 // Helper to format date in user's timezone
 const formatDateInTimezone = (dateStr: string, timezone: string) => {
@@ -183,7 +185,7 @@ const generate24hEmployeeEmail = (appointment: any, client: any, companyInfo: an
 <div style="background:#eff6ff;border-left:4px solid #3b82f6;padding:12px;margin:20px 0;text-align:center">
 <p style="margin:0 0 8px 0;font-size:14px;font-weight:bold;color:#1e40af">⏰ Clock In/Out System</p>
 <p style="margin:0 0 8px 0;font-size:13px;color:#1e40af">Use your phone number to clock in and out for this service:</p>
-<a href="${publicAppUrl}/employee/login" style="display:inline-block;background:#3b82f6;color:white;padding:10px 24px;text-decoration:none;border-radius:5px;font-weight:bold;margin-top:4px">Clock In/Out Here</a>
+<a href="${employeeAppUrl}" style="display:inline-block;background:#3b82f6;color:white;padding:10px 24px;text-decoration:none;border-radius:5px;font-weight:bold;margin-top:4px">Clock In/Out Here</a>
 </div>
 
 </div>
