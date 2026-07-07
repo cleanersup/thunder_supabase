@@ -203,6 +203,9 @@ verify_jwt = false
 [functions.resend-employee-invitation]
 verify_jwt = false
 
+[functions.resend-employee-invite]
+verify_jwt = false
+
 [functions.register-device-token]
 verify_jwt = false
 
