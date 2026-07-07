@@ -19,27 +19,43 @@ interface WebhookPayload {
   };
 }
 
-function buildWelcomeEmail(firstName: string, companyName: string, downloadUrl: string): string {
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function buildEmployeeDisplayName(firstName?: string | null, lastName?: string | null): string {
+  return [firstName, lastName].filter((part) => part && part.trim().length > 0).join(" ").trim();
+}
+
+function buildWelcomeEmail(employeeName: string, companyName: string, downloadUrl: string): string {
+  const safeName = escapeHtml(employeeName);
+  const safeCompany = escapeHtml(companyName);
+  const safeUrl = escapeHtml(downloadUrl);
+
   return `<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
 <body style="margin:0;padding:20px;font-family:Arial,sans-serif;background:#f9fafb;">
-  <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:10px;overflow:hidden;border:1px solid #e5e7eb;">
-    <div style="text-align:center;padding:20px;background:#1e3a8a;color:#fff;">
-      <h1 style="margin:0;font-size:22px;">${companyName}</h1>
+  <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:10px;border:1px solid #e5e7eb;">
+    <div style="text-align:center;padding:20px;background:#1e3a8a;color:#fff;border-radius:10px 10px 0 0;">
+      <h1 style="margin:0;font-size:22px;">${safeCompany}</h1>
       <p style="margin:5px 0 0;">Welcome to the team</p>
     </div>
-    <div style="padding:24px;color:#111827;line-height:1.6;">
-      <p style="font-size:16px;">Hi ${firstName},</p>
-      <p>You've been added to the <strong>${companyName}</strong> team on Thunder Pro.</p>
+    <div style="padding:24px;color:#111827;line-height:1.6;word-wrap:break-word;overflow-wrap:break-word;">
+      <p style="font-size:16px;margin:0 0 16px;white-space:normal;">Hi ${safeName},</p>
+      <p>You've been added to the <strong>${safeCompany}</strong> team on Thunder Pro.</p>
       <p>Download the Thunder Pro employee app to see your schedule, clock in/out, and manage your shifts:</p>
       <div style="text-align:center;margin:28px 0;">
-        <a href="${downloadUrl}" style="display:inline-block;background:#EB6A2A;color:#fff;padding:14px 28px;text-decoration:none;border-radius:6px;font-weight:bold;">Download the App</a>
+        <a href="${safeUrl}" style="display:inline-block;background:#EB6A2A;color:#fff;padding:14px 28px;text-decoration:none;border-radius:6px;font-weight:bold;">Download the App</a>
       </div>
       <p style="font-size:14px;color:#6b7280;">When you open the app, sign in with the phone number your employer registered for you. No password needed — you'll get a one-time code by SMS.</p>
     </div>
-    <div style="padding:14px 20px;background:#f3f4f6;color:#6b7280;font-size:12px;text-align:center;">
-      © ${new Date().getFullYear()} ${companyName} · Powered by Thunder Pro
+    <div style="padding:14px 20px;background:#f3f4f6;color:#6b7280;font-size:12px;text-align:center;border-radius:0 0 10px 10px;">
+      © ${new Date().getFullYear()} ${safeCompany} · Powered by Thunder Pro
     </div>
   </div>
 </body>
@@ -157,8 +173,9 @@ serve(async (req) => {
 
     const companyName = profile?.company_name || "Thunder Pro";
     const downloadUrl = Deno.env.get("EMPLOYEE_APP_DOWNLOAD_URL") || "https://app.staging.thunderpro.co/employee/login";
+    const employeeName = buildEmployeeDisplayName(employee.first_name, employee.last_name) || "there";
 
-    const html = buildWelcomeEmail(employee.first_name, companyName, downloadUrl);
+    const html = buildWelcomeEmail(employeeName, companyName, downloadUrl);
     await sendEmailViaSMTP(employee.email, `Welcome to the ${companyName} team`, html);
 
     console.log(`Welcome email sent to ${employee.email}`);
