@@ -203,34 +203,32 @@ serve(async (req) => {
     const companyName = profile?.company_name || "Thunder Pro";
     const timezone = profile?.timezone || "America/New_York";
 
-    // 1) Try push to all assigned employees.
+    // 1) Push to assigned employees who have an active device token (best-effort).
     const pushMessage = buildMessage(row, eventType, timezone, companyName);
-    let pushResult: { notifiedEmployeeIds: string[]; employeesWithoutToken: string[] };
+    let pushed = 0;
     try {
-      pushResult = await sendPushToEmployees(supabase, employeeIds, pushMessage);
+      const pushResult = await sendPushToEmployees(supabase, employeeIds, pushMessage);
+      pushed = pushResult.notifiedEmployeeIds.length;
     } catch (e) {
-      // If push infra fails entirely (e.g. missing FCM secret), fall back to SMS for everyone.
-      console.error("Push failed, falling back to SMS for all:", e);
-      pushResult = { notifiedEmployeeIds: [], employeesWithoutToken: employeeIds };
+      // Push infra may be unavailable (e.g. missing FCM secret); SMS still goes out below.
+      console.error("Push failed:", e);
     }
 
-    // 2) SMS fallback only for employees without an active push token.
+    // 2) SMS to every assigned employee with a phone — always, alongside push.
     let smsSent = 0;
-    if (pushResult.employeesWithoutToken.length > 0) {
-      const { data: employees } = await supabase
-        .from("employees")
-        .select("id, phone")
-        .in("id", pushResult.employeesWithoutToken);
+    const { data: employees } = await supabase
+      .from("employees")
+      .select("id, phone")
+      .in("id", employeeIds);
 
-      const smsBody = buildSmsFallback(row, eventType, timezone, companyName);
-      for (const emp of (employees ?? []) as { id: string; phone: string | null }[]) {
-        if (!emp.phone) continue;
-        try {
-          await sendSms(emp.phone, smsBody);
-          smsSent++;
-        } catch (e) {
-          console.error(`SMS fallback failed for employee ${emp.id}:`, e);
-        }
+    const smsBody = buildSmsFallback(row, eventType, timezone, companyName);
+    for (const emp of (employees ?? []) as { id: string; phone: string | null }[]) {
+      if (!emp.phone) continue;
+      try {
+        await sendSms(emp.phone, smsBody);
+        smsSent++;
+      } catch (e) {
+        console.error(`SMS failed for employee ${emp.id}:`, e);
       }
     }
 
@@ -238,7 +236,8 @@ serve(async (req) => {
       JSON.stringify({
         success: true,
         event_type: eventType,
-        pushed: pushResult.notifiedEmployeeIds.length,
+        pushed,
+        sms_sent: smsSent,
         sms_fallback: smsSent,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
