@@ -49,10 +49,13 @@ Deno.serve(async (req) => {
     console.log(`Fetching shifts for employee ${employeeId} from ${startDate}${to_date ? ` to ${to_date}` : " onward"}`);
 
     // ── SOURCE 1: route_appointments ──────────────────────────────────────────
+    // Exclude route_appointment mirrors of published jobs (sync_job_to_route_appointment sets job_id).
+    // Those shifts are returned from the jobs source with property_* address fields.
     let apptQuery = supabase
       .from("route_appointments")
       .select(`
         id,
+        job_id,
         scheduled_date,
         scheduled_time,
         end_time,
@@ -70,6 +73,7 @@ Deno.serve(async (req) => {
           service_zip
         )
       `)
+      .is("job_id", null)
       .gte("scheduled_date", startDate)
       .order("scheduled_date", { ascending: true });
 

@@ -209,6 +209,12 @@ verify_jwt = false
 [functions.register-device-token]
 verify_jwt = false
 
+[functions.get-employee-notifications]
+verify_jwt = false
+
+[functions.mark-employee-notification-read]
+verify_jwt = false
+
 [functions.upload-shift-photo]
 verify_jwt = false
 
