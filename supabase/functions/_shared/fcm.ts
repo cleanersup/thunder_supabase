@@ -176,11 +176,14 @@ export async function sendFcmToTokens(
 
         const err = await resp.json().catch(() => ({}));
         const status = err?.error?.status ?? "";
+        const detail = err?.error?.message ?? JSON.stringify(err);
         // UNREGISTERED = token no longer valid; INVALID_ARGUMENT on the token = malformed.
         if (status === "UNREGISTERED" || status === "NOT_FOUND" || resp.status === 404) {
           result.invalidTokens.push(token);
         }
-        console.error(`FCM send failed (${resp.status} ${status}) for token ${token.slice(0, 12)}…`);
+        console.error(
+          `FCM send failed (${resp.status} ${status}) for token ${token.slice(0, 12)}… — ${detail}`,
+        );
       } catch (e) {
         console.error("FCM send exception:", e);
       }
