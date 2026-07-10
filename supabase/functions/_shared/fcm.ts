@@ -160,6 +160,11 @@ export async function sendFcmToTokens(
   const result: SendResult = { successCount: 0, invalidTokens: [] };
   if (tokens.length === 0) return result;
 
+  // Always mint a fresh OAuth token per batch. Edge isolates can retain a stale
+  // cached token from before FCM_SERVICE_ACCOUNT_JSON was fixed, while
+  // test-fcm-credentials clears the cache and appears to work.
+  clearFcmTokenCache();
+
   const sa = loadServiceAccount();
   const accessToken = await getAccessToken(sa);
   if (!accessToken) {
