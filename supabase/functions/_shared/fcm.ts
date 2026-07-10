@@ -95,7 +95,7 @@ async function getAccessToken(sa: ServiceAccount): Promise<string> {
   const header = { alg: "RS256", typ: "JWT" };
   const claims = {
     iss: sa.client_email,
-    scope: "https://www.googleapis.com/auth/firebase.messaging",
+    scope: "https://www.googleapis.com/auth/firebase.messaging https://www.googleapis.com/auth/cloud-platform",
     aud: tokenUri,
     iat: now,
     exp: now + 3600,
@@ -173,14 +173,17 @@ export async function sendFcmToTokens(
   const endpoint = `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`;
 
   await Promise.all(
-    tokens.map(async (token) => {
+    tokens.map(async (rawToken) => {
+      const token = rawToken.trim();
+      if (!token) return;
       try {
+        const headers = new Headers();
+        headers.set("Authorization", `Bearer ${accessToken}`);
+        headers.set("Content-Type", "application/json");
+
         const resp = await fetch(endpoint, {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
+          headers,
           body: JSON.stringify({
             message: {
               token,
@@ -315,7 +318,9 @@ async function deliverGrouped(
 }
 
 /** Diagnostic helper — tests env parsing + OAuth without sending a push. */
-export async function diagnoseFcmCredentials(): Promise<Record<string, unknown>> {
+export async function diagnoseFcmCredentials(
+  deviceToken?: string,
+): Promise<Record<string, unknown>> {
   const raw = Deno.env.get("FCM_SERVICE_ACCOUNT_JSON") ?? "";
   const out: Record<string, unknown> = {
     env_configured: raw.length > 0,
@@ -353,6 +358,30 @@ export async function diagnoseFcmCredentials(): Promise<Record<string, unknown>>
     out.fcm_probe_status = probe.status;
     out.fcm_probe_error = probeJson?.error?.status ?? null;
     out.fcm_probe_message = probeJson?.error?.message ?? null;
+
+    if (deviceToken?.trim()) {
+      const real = await fetch(
+        `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            message: {
+              token: deviceToken.trim(),
+              notification: { title: "Test push", body: "Real device token probe" },
+            },
+          }),
+        },
+      );
+      const realJson = await real.json().catch(() => ({}));
+      out.real_device_status = real.status;
+      out.real_device_error = realJson?.error?.status ?? null;
+      out.real_device_message = realJson?.error?.message ?? null;
+      out.real_device_success = real.ok;
+    }
   } catch (e) {
     out.oauth_ok = false;
     out.oauth_error = e instanceof Error ? e.message : String(e);

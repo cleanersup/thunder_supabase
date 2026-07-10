@@ -12,7 +12,9 @@ serve(async (req) => {
   }
 
   try {
-    const report = await diagnoseFcmCredentials();
+    const body = await req.json().catch(() => ({}));
+    const deviceToken = typeof body?.device_token === "string" ? body.device_token : undefined;
+    const report = await diagnoseFcmCredentials(deviceToken);
     return new Response(JSON.stringify({ success: true, ...report }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
