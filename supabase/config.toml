@@ -224,5 +224,8 @@ verify_jwt = false
 [functions.notify-user-push]
 verify_jwt = false
 
+[functions.test-fcm-credentials]
+verify_jwt = false
+
 [functions.register-user-device-token]
 verify_jwt = true

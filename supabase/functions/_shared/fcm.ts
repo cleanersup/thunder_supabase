@@ -29,6 +29,11 @@ interface ServiceAccount {
 let cachedAccessToken: string | null = null;
 let cachedTokenExpiresAt = 0;
 
+export function clearFcmTokenCache(): void {
+  cachedAccessToken = null;
+  cachedTokenExpiresAt = 0;
+}
+
 function loadServiceAccount(): ServiceAccount {
   const raw = Deno.env.get("FCM_SERVICE_ACCOUNT_JSON");
   if (!raw) {
@@ -125,11 +130,19 @@ async function getAccessToken(sa: ServiceAccount): Promise<string> {
 
   const json = await resp.json();
   if (!resp.ok || !json.access_token) {
+    clearFcmTokenCache();
     throw new Error(`Failed to obtain FCM access token: ${JSON.stringify(json)}`);
   }
 
-  cachedAccessToken = json.access_token as string;
-  cachedTokenExpiresAt = now + (json.expires_in ?? 3600);
+  const accessToken = String(json.access_token).trim();
+  if (!accessToken) {
+    clearFcmTokenCache();
+    throw new Error("FCM OAuth returned an empty access_token");
+  }
+
+  cachedAccessToken = accessToken;
+  cachedTokenExpiresAt = now + Number(json.expires_in ?? 3600);
+  console.log(`FCM OAuth token acquired (len=${accessToken.length}, expires_in=${json.expires_in ?? 3600})`);
   return cachedAccessToken;
 }
 
@@ -149,6 +162,9 @@ export async function sendFcmToTokens(
 
   const sa = loadServiceAccount();
   const accessToken = await getAccessToken(sa);
+  if (!accessToken) {
+    throw new Error("FCM access token is empty before send");
+  }
   const endpoint = `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`;
 
   await Promise.all(
@@ -177,6 +193,9 @@ export async function sendFcmToTokens(
         const err = await resp.json().catch(() => ({}));
         const status = err?.error?.status ?? "";
         const detail = err?.error?.message ?? JSON.stringify(err);
+        if (resp.status === 401) {
+          clearFcmTokenCache();
+        }
         // UNREGISTERED = token no longer valid; INVALID_ARGUMENT on the token = malformed.
         if (status === "UNREGISTERED" || status === "NOT_FOUND" || resp.status === 404) {
           result.invalidTokens.push(token);
@@ -287,5 +306,51 @@ async function deliverGrouped(
       .in("token", allInvalidTokens);
   }
 
+  return out;
+}
+
+/** Diagnostic helper — tests env parsing + OAuth without sending a push. */
+export async function diagnoseFcmCredentials(): Promise<Record<string, unknown>> {
+  const raw = Deno.env.get("FCM_SERVICE_ACCOUNT_JSON") ?? "";
+  const out: Record<string, unknown> = {
+    env_configured: raw.length > 0,
+    env_length: raw.length,
+  };
+  try {
+    const sa = loadServiceAccount();
+    out.project_id = sa.project_id;
+    out.client_email = sa.client_email;
+    out.private_key_length = sa.private_key?.length ?? 0;
+    clearFcmTokenCache();
+    const token = await getAccessToken(sa);
+    out.oauth_ok = true;
+    out.access_token_length = token.length;
+    out.access_token_prefix = token.slice(0, 12);
+
+    // Probe FCM with a dummy token — 400 INVALID_ARGUMENT means OAuth worked; 401 means auth failed.
+    const probe = await fetch(
+      `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          message: {
+            token: "probe-token-invalid",
+            notification: { title: "probe", body: "probe" },
+          },
+        }),
+      },
+    );
+    const probeJson = await probe.json().catch(() => ({}));
+    out.fcm_probe_status = probe.status;
+    out.fcm_probe_error = probeJson?.error?.status ?? null;
+    out.fcm_probe_message = probeJson?.error?.message ?? null;
+  } catch (e) {
+    out.oauth_ok = false;
+    out.oauth_error = e instanceof Error ? e.message : String(e);
+  }
   return out;
 }
