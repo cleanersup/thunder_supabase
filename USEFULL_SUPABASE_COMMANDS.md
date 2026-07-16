@@ -34,6 +34,22 @@ docker exec -it supabase_db_euydrdzayvjahstvmwoj psql -U postgres -d postgres
 #MAKE MIGRATION
 docker exec -i supabase_db_euydrdzayvjahstvmwoj psql -U postgres -d postgres < supabase/migrations/20251221120000_add_trial_start_date.sql
 
+# --- Job reminders cron (send-job-reminders-daily) ---
+# 1) Deploy function + config (verify_jwt = false in config.toml)
+scp -r /Users/carloszavala/Desktop/programacion/thunderpro/thunder_supabase/supabase/functions/send-job-reminders staging.thunderpro.co:/home/admin/thunder_supabase/supabase/functions/
+scp /Users/carloszavala/Desktop/programacion/thunderpro/thunder_supabase/supabase/config.toml staging.thunderpro.co:/home/admin/thunder_supabase/supabase/config.toml
+docker restart supabase_edge_runtime_euydrdzayvjahstvmwoj
+
+# 2) Apply table + cron (copies Bearer token from send-appointment-emails-daily)
+docker exec -i supabase_db_euydrdzayvjahstvmwoj psql -U postgres -d postgres < /home/admin/thunder_supabase/scripts/staging-job-reminders-setup.sql
+
+# 3) Manual test (optional — fires the function once)
+docker exec -i supabase_db_euydrdzayvjahstvmwoj psql -U postgres -d postgres < /home/admin/thunder_supabase/scripts/staging-job-reminders-manual-test.sql
+docker logs supabase_edge_runtime_euydrdzayvjahstvmwoj --tail 100
+
+# 4) Verify cron registered
+docker exec -it supabase_db_euydrdzayvjahstvmwoj psql -U postgres -d postgres -c "SELECT jobname, schedule, active FROM cron.job WHERE jobname LIKE '%job-reminder%';"
+
 #START SUPABASE WORKING NOW STAGING AND PROD DEFAULT SAVE GUARD   
 supabase start -x postgres-meta,studio,logflare,imgproxy,storage-api
 
