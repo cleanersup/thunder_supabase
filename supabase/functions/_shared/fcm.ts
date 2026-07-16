@@ -359,7 +359,33 @@ export async function diagnoseFcmCredentials(
     out.fcm_probe_error = probeJson?.error?.status ?? null;
     out.fcm_probe_message = probeJson?.error?.message ?? null;
 
+    // Well-formed fake token (same shape as iOS FCM tokens) — should still be 400 if OAuth works.
+    const formattedFake = "000000000000:APA91bE000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+    const formattedProbe = await fetch(
+      `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          message: {
+            token: formattedFake,
+            notification: { title: "probe", body: "probe" },
+          },
+        }),
+      },
+    );
+    const formattedProbeJson = await formattedProbe.json().catch(() => ({}));
+    out.formatted_probe_status = formattedProbe.status;
+    out.formatted_probe_error = formattedProbeJson?.error?.status ?? null;
+
     if (deviceToken?.trim()) {
+      const trimmed = deviceToken.trim();
+      out.device_token_length = trimmed.length;
+      out.device_token_has_whitespace = trimmed.length !== deviceToken.length;
+
       const real = await fetch(
         `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`,
         {
@@ -370,7 +396,7 @@ export async function diagnoseFcmCredentials(
           },
           body: JSON.stringify({
             message: {
-              token: deviceToken.trim(),
+              token: trimmed,
               notification: { title: "Test push", body: "Real device token probe" },
             },
           }),
@@ -381,6 +407,20 @@ export async function diagnoseFcmCredentials(
       out.real_device_error = realJson?.error?.status ?? null;
       out.real_device_message = realJson?.error?.message ?? null;
       out.real_device_success = real.ok;
+
+      const helper = await sendFcmToTokens([trimmed], {
+        title: "Test push",
+        body: "via sendFcmToTokens",
+      });
+      out.send_helper_success_count = helper.successCount;
+      out.send_helper_invalid_tokens = helper.invalidTokens.length;
+
+      if (out.oauth_ok && out.fcm_probe_status === 400 && out.real_device_status === 401) {
+        out.diagnosis =
+          "OAuth and service account are valid, but this device token is rejected with 401 while fake tokens get 400. " +
+          "The token was almost certainly minted by a different Firebase project than the service account " +
+          `(${sa.project_id}). Rebuild the iOS app with GoogleService-Info.plist from that project, reinstall, and re-register the token.`;
+      }
     }
   } catch (e) {
     out.oauth_ok = false;

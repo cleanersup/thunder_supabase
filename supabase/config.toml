@@ -200,6 +200,9 @@ verify_jwt = false
 [functions.notify-job-employees]
 verify_jwt = false
 
+[functions.send-job-reminders]
+verify_jwt = false
+
 [functions.resend-employee-invitation]
 verify_jwt = false
 

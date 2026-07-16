@@ -498,6 +498,19 @@ ${invoice.notes ? `<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Notes</h3><div 
           }
 
 
+          // Notify owner in-app (-> push) that this invoice is due today
+          const { error: notifyError } = await supabase.from('notifications').insert({
+            user_id: invoice.user_id,
+            type: 'invoice_overdue',
+            title: 'Invoice payment due',
+            message: `Invoice ${invoice.invoice_number} for ${invoice.client_name} (${f(invoice.total)}) is due today.`,
+            related_id: invoice.id,
+            related_type: 'invoice',
+          });
+          if (notifyError) {
+            console.error(`Error creating invoice_overdue notification for ${invoice.invoice_number}:`, notifyError);
+          }
+
           // Mark reminder as sent in database
           const { error: updateError } = await supabase
             .from('invoices')

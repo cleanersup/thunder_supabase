@@ -33,7 +33,8 @@ serve(async (req) => {
       });
     }
 
-    const { token, platform }: RegisterTokenRequest = await req.json();
+    const { token: rawToken, platform }: RegisterTokenRequest = await req.json();
+    const token = rawToken?.trim();
     if (!token || !platform) {
       return new Response(JSON.stringify({ error: "token and platform are required" }), {
         status: 400,

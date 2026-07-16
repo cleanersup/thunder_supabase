@@ -103,6 +103,30 @@ serve(async (req) => {
         }
 
         console.log(`Successfully marked ${type} ${id} as viewed`);
+
+        if (type === "invoice") {
+          const { data: invoiceRow, error: invoiceFetchError } = await supabase
+            .from("invoices")
+            .select("user_id, invoice_number, client_name, total")
+            .eq("id", id)
+            .single();
+
+          if (invoiceFetchError || !invoiceRow) {
+            console.error("[mark-viewed] Failed to fetch invoice for notification:", invoiceFetchError);
+          } else {
+            const { error: notifyError } = await supabase.from("notifications").insert({
+              user_id: invoiceRow.user_id,
+              type: "invoice_viewed",
+              title: "Invoice viewed",
+              message: `${invoiceRow.client_name} viewed invoice ${invoiceRow.invoice_number} ($${Number(invoiceRow.total ?? 0).toFixed(2)}).`,
+              related_id: id,
+              related_type: "invoice",
+            });
+            if (notifyError) {
+              console.error("[mark-viewed] Failed to insert invoice_viewed notification:", notifyError);
+            }
+          }
+        }
       } else {
         console.log(`${type} ${id} was already viewed at ${existing.viewed_at}`);
       }
