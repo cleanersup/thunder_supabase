@@ -98,7 +98,9 @@ serve(async (req) => {
           is_on_break: isOnBreak,
           last_break_start: activeEntry.break_start_time,
           total_break_seconds: totalBreakSeconds,
-          status: activeEntry.status
+          status: activeEntry.status,
+          job_id: activeEntry.job_id ?? null,
+          route_appointment_id: activeEntry.route_appointment_id ?? null,
         }
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
