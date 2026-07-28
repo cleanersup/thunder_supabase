@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.76.1';
+import { resolveWalkthroughContactInfo } from "../_shared/resolveWalkthroughContactInfo.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -424,64 +425,7 @@ const handler = async (req: Request): Promise<Response> => {
       throw new Error('Walkthrough not found');
     }
 
-    let contactInfo: any = null;
-    if (walkthrough.walkthrough_type === 'client' && walkthrough.client_id) {
-      const { data: client } = await supabase
-        .from('clients')
-        .select('full_name, company, phone, email, service_street, service_city, service_state, service_zip, service_apt')
-        .eq('id', walkthrough.client_id)
-        .single();
-      contactInfo = client;
-    } else if (walkthrough.walkthrough_type === 'lead' && walkthrough.lead_id) {
-      const { data: lead } = await supabase
-        .from('leads')
-        .select('full_name, company_name, phone, email, address, city, state, zip_code, apt_suite')
-        .eq('id', walkthrough.lead_id)
-        .maybeSingle();
-
-      if (lead) {
-        contactInfo = {
-          full_name: lead.full_name,
-          lead_name: lead.full_name,
-          company: lead.company_name,
-          phone: lead.phone,
-          email: lead.email,
-          service_street: lead.address,
-          service_city: lead.city,
-          service_state: lead.state,
-          service_zip: lead.zip_code,
-          service_apt: lead.apt_suite,
-          street: lead.address,
-          city: lead.city,
-          state: lead.state,
-          zip_code: lead.zip_code,
-          apt_suite: lead.apt_suite,
-        };
-      } else {
-        const { data: booking } = await supabase
-          .from('bookings')
-          .select('lead_name, phone, email, street, city, state, zip_code')
-          .eq('id', walkthrough.lead_id)
-          .maybeSingle();
-
-        if (booking) {
-          contactInfo = {
-            full_name: booking.lead_name,
-            lead_name: booking.lead_name,
-            phone: booking.phone,
-            email: booking.email,
-            service_street: booking.street,
-            street: booking.street,
-            service_city: booking.city,
-            city: booking.city,
-            service_state: booking.state,
-            state: booking.state,
-            service_zip: booking.zip_code,
-            zip_code: booking.zip_code,
-          };
-        }
-      }
-    }
+    const contactInfo = await resolveWalkthroughContactInfo(supabase, walkthrough);
 
     if (!contactInfo) {
       throw new Error('Contact information not found');

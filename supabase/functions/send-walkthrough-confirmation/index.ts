@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.76.1';
+import { resolveWalkthroughContactInfo } from "../_shared/resolveWalkthroughContactInfo.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -367,43 +368,18 @@ const handler = async (req: Request): Promise<Response> => {
       employees = employeeData || [];
     }
 
-    // Get client or lead information
-    let contactInfo: any = null;
-
-    if (walkthrough.walkthrough_type === 'client' && walkthrough.client_id) {
-      const { data: client } = await supabaseClient
-        .from('clients')
-        .select('*')
-        .eq('id', walkthrough.client_id)
-        .single();
-      contactInfo = client;
-      console.log('✅ Client info:', client);
-    } else if (walkthrough.walkthrough_type === 'lead' && walkthrough.lead_id) {
-      // Try leads table first
-      const { data: lead } = await supabaseClient
-        .from('leads')
-        .select('*')
-        .eq('id', walkthrough.lead_id)
-        .maybeSingle();
-
-      if (lead) {
-        contactInfo = lead;
-        console.log('✅ Lead info from leads table:', lead);
-      } else {
-        // Try bookings table
-        const { data: booking } = await supabaseClient
-          .from('bookings')
-          .select('*')
-          .eq('id', walkthrough.lead_id)
-          .maybeSingle();
-        contactInfo = booking;
-        console.log('✅ Lead info from bookings table:', booking);
-      }
-    }
+    // Get client or lead information (respects property_id / service_* on walkthrough)
+    const contactInfo = await resolveWalkthroughContactInfo(supabaseClient, walkthrough);
 
     if (!contactInfo) {
       throw new Error('Contact information not found');
     }
+
+    console.log('✅ Resolved contact info:', {
+      name: contactInfo.full_name,
+      email: contactInfo.email,
+      service_street: contactInfo.service_street,
+    });
 
     let ownerEmailSent = false;
     let clientEmailSent = false;

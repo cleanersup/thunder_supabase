@@ -4,6 +4,7 @@
  */
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.76.1";
+import { resolveWalkthroughContactInfo } from "../_shared/resolveWalkthroughContactInfo.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -174,39 +175,7 @@ serve(async (req) => {
       .maybeSingle();
     const tz = companyInfo?.timezone || "UTC";
 
-    let contactInfo: any = null;
-    if (walkthrough.walkthrough_type === "client" && walkthrough.client_id) {
-      const { data: client } = await supabase.from("clients").select("*").eq("id", walkthrough.client_id).single();
-      contactInfo = client;
-    } else if (walkthrough.walkthrough_type === "lead" && walkthrough.lead_id) {
-      const { data: lead } = await supabase.from("leads").select("*").eq("id", walkthrough.lead_id).maybeSingle();
-      if (lead) {
-        contactInfo = {
-          full_name: lead.full_name,
-          company: lead.company_name,
-          phone: lead.phone,
-          email: lead.email,
-          service_street: lead.address,
-          service_city: lead.city,
-          service_state: lead.state,
-          service_zip: lead.zip_code,
-        };
-      } else {
-        const { data: booking } = await supabase.from("bookings").select("*").eq("id", walkthrough.lead_id).maybeSingle();
-        if (booking) {
-          contactInfo = {
-            full_name: booking.lead_name,
-            lead_name: booking.lead_name,
-            phone: booking.phone,
-            email: booking.email,
-            street: booking.street,
-            city: booking.city,
-            state: booking.state,
-            zip_code: booking.zip_code,
-          };
-        }
-      }
-    }
+    const contactInfo = await resolveWalkthroughContactInfo(supabase, walkthrough);
     if (!contactInfo) {
       return new Response(JSON.stringify({ error: "Contact not found" }), {
         status: 400,

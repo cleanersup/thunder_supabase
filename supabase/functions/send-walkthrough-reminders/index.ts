@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.76.1';
+import { resolveWalkthroughContactInfo } from "../_shared/resolveWalkthroughContactInfo.ts";
 import { toZonedTime, fromZonedTime } from 'https://esm.sh/date-fns-tz@3.2.0';
 
 const corsHeaders = {
@@ -421,35 +422,7 @@ const handler = async (req: Request): Promise<Response> => {
         }
 
         // Get client or lead information
-        let contactInfo: any = null;
-        
-        if (walkthrough.walkthrough_type === 'client' && walkthrough.client_id) {
-          const { data: client } = await supabaseClient
-            .from('clients')
-            .select('*')
-            .eq('id', walkthrough.client_id)
-            .single();
-          contactInfo = client;
-        } else if (walkthrough.walkthrough_type === 'lead' && walkthrough.lead_id) {
-          // Try leads table first
-          const { data: lead } = await supabaseClient
-            .from('leads')
-            .select('*')
-            .eq('id', walkthrough.lead_id)
-            .maybeSingle();
-          
-          if (lead) {
-            contactInfo = lead;
-          } else {
-            // Try bookings table
-            const { data: booking } = await supabaseClient
-              .from('bookings')
-              .select('*')
-              .eq('id', walkthrough.lead_id)
-              .maybeSingle();
-            contactInfo = booking;
-          }
-        }
+        const contactInfo = await resolveWalkthroughContactInfo(supabaseClient, walkthrough);
 
         if (!contactInfo) {
           console.log(`⚠️ No contact info found for walkthrough ${walkthrough.id}`);
