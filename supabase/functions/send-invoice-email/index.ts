@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
+import { resolvePublicAppUrl } from "../_shared/resolvePublicAppUrl.ts";
 import { computeInvoiceAmountDue } from "../_shared/invoiceAmountDue.ts";
 import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
 import { buildInvoiceTotalsSummaryHtml, calculateInvoiceTotals } from "../_shared/invoiceCalculations.ts";
@@ -343,7 +344,7 @@ serve(async (req) => {
       console.log('APP_URL from env:', appUrlEnv || 'NOT SET');
       console.log('SUPABASE_URL from env:', supabaseUrlEnv || 'NOT SET');
 
-      const publicAppUrl = publicAppUrlEnv || appUrlEnv || 'https://app.staging.thunderpro.co';
+      const publicAppUrl = resolvePublicAppUrl();
       // Use payment_token (opaque) instead of raw UUID to prevent URL enumeration
       const paymentLink = `${publicAppUrl}/invoice/payment/${invoice.payment_token || invoiceId}`;
 

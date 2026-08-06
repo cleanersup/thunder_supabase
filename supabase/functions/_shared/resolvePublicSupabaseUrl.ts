@@ -13,7 +13,7 @@ function isInternalSupabaseUrl(url: string): boolean {
   );
 }
 
-function isStagingEnvironment(): boolean {
+export function isStagingEnvironment(): boolean {
   const envValues = [
     Deno.env.get("ENVIRONMENT"),
     Deno.env.get("PUBLIC_SUPABASE_URL_API"),

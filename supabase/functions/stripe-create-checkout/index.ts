@@ -5,6 +5,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import Stripe from "https://esm.sh/stripe@14.14.0?target=deno";
+import { resolvePublicAppUrl } from "../_shared/resolvePublicAppUrl.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -292,7 +293,7 @@ serve(async (req) => {
     }
 
     // Get success/cancel URLs
-    const appUrl = Deno.env.get("APP_URL") || "https://app.staging.thunderpro.co";
+    const appUrl = resolvePublicAppUrl();
 
     // Transform line items to Stripe format
     const stripeLineItems: Stripe.Checkout.SessionCreateParams.LineItem[] =
