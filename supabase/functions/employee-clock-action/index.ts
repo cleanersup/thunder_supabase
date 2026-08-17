@@ -56,6 +56,31 @@ function haversineMetres(
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+/**
+ * Records an action for idempotency. Must be AWAITED: `insert()` returns a lazy
+ * thenable, not a Promise, so calling `.catch()` on it throws a TypeError — which
+ * aborted the request *after* the time entry had already been written (the app saw
+ * a 500 for an action that actually succeeded) and left the log row unwritten, so
+ * replays were never deduplicated. Failures here stay non-fatal.
+ */
+async function writeActionLog(
+  supabase: ReturnType<typeof createClient>,
+  entry: {
+    client_action_id: string;
+    time_entry_id: string;
+    employee_id: string;
+    action: ClockActionRequest["action"];
+    event_time: string;
+  },
+): Promise<void> {
+  try {
+    const { error } = await supabase.from("time_entry_action_log").insert(entry);
+    if (error) console.error(`Failed to write action log (${entry.action}):`, error);
+  } catch (e) {
+    console.error(`Failed to write action log (${entry.action}):`, e);
+  }
+}
+
 serve(async (req) => {
   return await Sentry.withScope(async (scope) => {
     Sentry.setTag("function", "employee-clock-action");
@@ -282,15 +307,15 @@ serve(async (req) => {
             timeEntry = data;
           }
 
-          // Log action for idempotency (fire-and-forget — non-fatal if it fails)
+          // Log action for idempotency (non-fatal if it fails)
           if (client_action_id) {
-            supabase.from("time_entry_action_log").insert({
+            await writeActionLog(supabase, {
               client_action_id,
               time_entry_id: timeEntry.id,
               employee_id,
               action: "clock_in",
               event_time: now,
-            }).catch((e: unknown) => console.error("Failed to write action log (clock_in):", e));
+            });
           }
 
           console.log(`Clock-in for employee ${employee_id}, entry ${timeEntry.id}`);
@@ -333,13 +358,13 @@ serve(async (req) => {
           timeEntry = data;
 
           if (client_action_id) {
-            supabase.from("time_entry_action_log").insert({
+            await writeActionLog(supabase, {
               client_action_id,
               time_entry_id: timeEntry.id,
               employee_id,
               action: "clock_out",
               event_time: now,
-            }).catch((e: unknown) => console.error("Failed to write action log (clock_out):", e));
+            });
           }
 
           console.log(`Clock-out for employee ${employee_id}`);
@@ -380,13 +405,13 @@ serve(async (req) => {
           timeEntry = data;
 
           if (client_action_id) {
-            supabase.from("time_entry_action_log").insert({
+            await writeActionLog(supabase, {
               client_action_id,
               time_entry_id: timeEntry.id,
               employee_id,
               action: "break_start",
               event_time: now,
-            }).catch((e: unknown) => console.error("Failed to write action log (break_start):", e));
+            });
           }
 
           console.log(`Break started for employee ${employee_id}`);
@@ -423,13 +448,13 @@ serve(async (req) => {
           timeEntry = data;
 
           if (client_action_id) {
-            supabase.from("time_entry_action_log").insert({
+            await writeActionLog(supabase, {
               client_action_id,
               time_entry_id: timeEntry.id,
               employee_id,
               action: "break_end",
               event_time: now,
-            }).catch((e: unknown) => console.error("Failed to write action log (break_end):", e));
+            });
           }
 
           console.log(`Break ended for employee ${employee_id}`);
