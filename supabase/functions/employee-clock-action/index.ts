@@ -357,6 +357,26 @@ serve(async (req) => {
           if (error) throw error;
           timeEntry = data;
 
+          // Mirror route_appointment sync: when the employee clocks out of a job
+          // shift, mark that job completed so the app stops offering Clock In.
+          const linkedJobId =
+            (timeEntry.job_id as string | null) ??
+            (existingEntry.job_id as string | null) ??
+            job_id ??
+            null;
+          if (linkedJobId) {
+            const { error: jobError } = await supabase
+              .from("jobs")
+              .update({ status: "completed" })
+              .eq("id", linkedJobId)
+              .not("status", "in", '("completed","cancelled")');
+            if (jobError) {
+              console.error(`Failed to mark job ${linkedJobId} completed on clock-out:`, jobError);
+            } else {
+              console.log(`Job ${linkedJobId} marked completed after clock-out`);
+            }
+          }
+
           if (client_action_id) {
             await writeActionLog(supabase, {
               client_action_id,
