@@ -109,6 +109,11 @@ serve(async (req) => {
         client_action_id,
         has_event_time: !!event_time,
         job_id: job_id ?? null,
+        route_appointment_id: route_appointment_id ?? null,
+        has_employee_gps: latitude != null && longitude != null,
+        employee_latitude: latitude ?? null,
+        employee_longitude: longitude ?? null,
+        local_date: local_date ?? null,
       });
 
       // ── Validate required fields ────────────────────────────────────────────
@@ -203,7 +208,13 @@ serve(async (req) => {
           );
         }
 
-        if (latitude != null && longitude != null && job?.site_latitude != null && job?.site_longitude != null) {
+        if (latitude == null || longitude == null) {
+          console.warn(
+            `Clock-in missing employee GPS: job_id=${job_id ?? "n/a"} employee_id=${employee_id} ` +
+            `latitude=${latitude} longitude=${longitude} ` +
+            `(server geofence ${job?.site_latitude != null && job?.site_longitude != null ? "skipped" : "n/a"})`,
+          );
+        } else if (job?.site_latitude != null && job?.site_longitude != null) {
           const radiusM = job.geofence_radius_meters ?? 200;
           const distanceM = haversineMetres(
             latitude, longitude,
@@ -223,7 +234,27 @@ serve(async (req) => {
           }
 
           console.log(`Geofence OK: employee ${employee_id} is ${Math.round(distanceM)}m from site`);
+        } else if (
+          latitude != null &&
+          longitude != null &&
+          job &&
+          (job.site_latitude == null || job.site_longitude == null)
+        ) {
+          console.warn(
+            `Clock-in employee GPS present but job has no stored site coords — server geofence skipped: ` +
+            `job_id=${job_id} employee_id=${employee_id} ` +
+            `employee_lat=${latitude} employee_lng=${longitude}`,
+          );
         }
+      }
+
+      if (action === "clock_in" && !job_id && route_appointment_id) {
+        console.log(
+          `Clock-in via route_appointment (no job_id): appointment_id=${route_appointment_id} employee_id=${employee_id}`,
+        );
+      }
+      if (action === "clock_in" && !job_id && !route_appointment_id) {
+        console.log(`Clock-in general/ad-hoc (no job_id, no route_appointment_id): employee_id=${employee_id}`);
       }
 
       // ── Resolve calendar date ───────────────────────────────────────────────

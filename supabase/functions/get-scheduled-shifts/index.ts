@@ -269,6 +269,14 @@ Deno.serve(async (req) => {
 
     console.log(`Returning ${allShifts.length} shifts (${appointmentShifts.length} appointments + ${jobShifts.length} jobs)`);
 
+    const jobsWithCoords = filteredJobs.filter(
+      (j) => j.site_latitude != null && j.site_longitude != null,
+    ).length;
+    console.log(
+      `get-scheduled-shifts summary: employee_id=${employeeId} jobs=${filteredJobs.length} ` +
+      `jobs_with_stored_coords=${jobsWithCoords} jobs_missing_coords=${filteredJobs.length - jobsWithCoords}`,
+    );
+
     return new Response(
       JSON.stringify({ success: true, shifts: allShifts }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
