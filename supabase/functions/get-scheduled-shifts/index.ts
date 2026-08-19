@@ -230,6 +230,14 @@ Deno.serve(async (req) => {
       if (job.property_city) parts.push(`${job.property_city}, ${job.property_state} ${job.property_zip}`);
       const address = parts.join(" ") || "Address not available";
 
+      if (job.site_latitude == null || job.site_longitude == null) {
+        console.warn(
+          `get-scheduled-shifts: job has no stored site coordinates: job_id=${job.id} ` +
+          `job_number=${job.job_number ?? "n/a"} site_latitude=${job.site_latitude} ` +
+          `site_longitude=${job.site_longitude}`,
+        );
+      }
+
       return {
         id: job.id,
         source: "job" as const,

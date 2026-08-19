@@ -175,15 +175,35 @@ serve(async (req) => {
       Sentry.setUser({ id: employee.id });
 
       // ── Server-side geofence validation (clock_in only) ─────────────────────
-      // Only runs when a job_id is provided and that job has site coordinates.
-      if (action === "clock_in" && job_id && latitude != null && longitude != null) {
-        const { data: job } = await supabase
+      // Log job site coords whenever clock_in carries a job_id (even if the client
+      // blocked earlier — when the request reaches here, this confirms DB state).
+      if (action === "clock_in" && job_id) {
+        const { data: job, error: jobLookupError } = await supabase
           .from("jobs")
-          .select("site_latitude, site_longitude, geofence_radius_meters")
+          .select("job_number, site_latitude, site_longitude, geofence_radius_meters")
           .eq("id", job_id)
           .maybeSingle();
 
-        if (job?.site_latitude != null && job?.site_longitude != null) {
+        if (jobLookupError || !job) {
+          console.warn(
+            `Clock-in job lookup failed: job_id=${job_id} employee_id=${employee_id}`,
+            jobLookupError ?? "not found",
+          );
+        } else if (job.site_latitude == null || job.site_longitude == null) {
+          console.warn(
+            `Job has no stored site coordinates: job_id=${job_id} job_number=${job.job_number ?? "n/a"} ` +
+            `site_latitude=${job.site_latitude} site_longitude=${job.site_longitude} ` +
+            `(employee ${employee_id}; client must geocode; server geofence skipped)`,
+          );
+        } else {
+          console.log(
+            `Job site coordinates stored: job_id=${job_id} job_number=${job.job_number ?? "n/a"} ` +
+            `site_latitude=${job.site_latitude} site_longitude=${job.site_longitude} ` +
+            `geofence_radius_meters=${job.geofence_radius_meters ?? 200}`,
+          );
+        }
+
+        if (latitude != null && longitude != null && job?.site_latitude != null && job?.site_longitude != null) {
           const radiusM = job.geofence_radius_meters ?? 200;
           const distanceM = haversineMetres(
             latitude, longitude,
