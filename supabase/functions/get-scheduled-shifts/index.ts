@@ -231,10 +231,16 @@ Deno.serve(async (req) => {
       const address = parts.join(" ") || "Address not available";
 
       if (job.site_latitude == null || job.site_longitude == null) {
+        // The app must geocode this address at clock-in; if that fails it blocks
+        // with "Couldn't verify the job site location". Log the exact string it
+        // will try so a failing address is obvious from the server side.
         console.warn(
           `get-scheduled-shifts: job has no stored site coordinates: job_id=${job.id} ` +
           `job_number=${job.job_number ?? "n/a"} site_latitude=${job.site_latitude} ` +
-          `site_longitude=${job.site_longitude}`,
+          `site_longitude=${job.site_longitude} status=${job.status} ` +
+          `address_to_geocode="${address}" ` +
+          `street="${job.property_street ?? ""}" city="${job.property_city ?? ""}" ` +
+          `state="${job.property_state ?? ""}" zip="${job.property_zip ?? ""}"`,
         );
       }
 
