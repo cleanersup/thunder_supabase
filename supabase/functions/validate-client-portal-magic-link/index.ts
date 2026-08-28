@@ -31,11 +31,63 @@ function normalizeRedirect(path: string): string {
   return ok ? p : "/invoices";
 }
 
+function isEmailExistsError(err: { code?: string; message?: string } | null): boolean {
+  if (!err) return false;
+  if (err.code === "email_exists") return true;
+  return /already been registered|already exists/i.test(err.message ?? "");
+}
+
+/**
+ * Resolve auth.users id by email. Prefer GoTrue's email filter — scanning
+ * listUsers pages misses accounts once the project has more users than the
+ * page budget (that caused createUser email_exists → portal login loop).
+ */
 async function findAuthUserIdByEmail(
   supabase: ReturnType<typeof createClient>,
+  supabaseUrl: string,
+  serviceKey: string,
   email: string,
 ): Promise<string | null> {
-  for (let page = 1; page <= 25; page++) {
+  const emailNorm = email.toLowerCase();
+
+  try {
+    const url =
+      `${supabaseUrl.replace(/\/$/, "")}/auth/v1/admin/users?email=${
+        encodeURIComponent(emailNorm)
+      }`;
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${serviceKey}`,
+        apikey: serviceKey,
+      },
+    });
+    if (res.ok) {
+      const body = await res.json() as {
+        users?: Array<{ id: string; email?: string }>;
+        id?: string;
+        email?: string;
+      };
+      if (Array.isArray(body.users)) {
+        const match = body.users.find(
+          (u) => u.email?.toLowerCase() === emailNorm,
+        );
+        if (match?.id) return match.id;
+      } else if (body.id && body.email?.toLowerCase() === emailNorm) {
+        return body.id;
+      }
+    } else {
+      console.error(
+        "admin users?email= failed",
+        res.status,
+        await res.text().catch(() => ""),
+      );
+    }
+  } catch (e) {
+    console.error("admin users?email= error", e);
+  }
+
+  // Fallback: paginate (small projects / older GoTrue without email filter)
+  for (let page = 1; page <= 50; page++) {
     const { data, error } = await supabase.auth.admin.listUsers({
       page,
       perPage: 200,
@@ -45,7 +97,7 @@ async function findAuthUserIdByEmail(
       return null;
     }
     const u = data.users.find(
-      (x) => x.email?.toLowerCase() === email.toLowerCase(),
+      (x) => x.email?.toLowerCase() === emailNorm,
     );
     if (u) return u.id;
     if (data.users.length < 200) break;
@@ -138,7 +190,12 @@ serve(async (req: Request) => {
       active_client_id: clientId,
     };
 
-    let userId = await findAuthUserIdByEmail(supabase, emailNorm);
+    let userId = await findAuthUserIdByEmail(
+      supabase,
+      supabaseUrl,
+      serviceKey,
+      emailNorm,
+    );
 
     if (!userId) {
       const password = crypto.randomUUID() + crypto.randomUUID();
@@ -150,7 +207,32 @@ serve(async (req: Request) => {
           app_metadata: appMeta,
         });
 
-      if (createErr || !created.user) {
+      if (createErr && isEmailExistsError(createErr)) {
+        // Race / missed lookup: account exists — resolve id and continue.
+        console.warn(
+          "createUser email_exists — retrying lookup for",
+          emailNorm,
+        );
+        userId = await findAuthUserIdByEmail(
+          supabase,
+          supabaseUrl,
+          serviceKey,
+          emailNorm,
+        );
+        if (!userId) {
+          console.error(
+            "createUser email_exists but user still not found:",
+            createErr,
+          );
+          return new Response(
+            JSON.stringify({ error: "Could not complete sign-in. Try again." }),
+            {
+              status: 500,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            },
+          );
+        }
+      } else if (createErr || !created.user) {
         console.error("createUser:", createErr);
         return new Response(
           JSON.stringify({ error: "Could not complete sign-in. Try again." }),
@@ -159,23 +241,25 @@ serve(async (req: Request) => {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           },
         );
+      } else {
+        userId = created.user.id;
       }
-      userId = created.user.id;
-    } else {
-      const { error: updErr } = await supabase.auth.admin.updateUserById(
-        userId,
-        { app_metadata: appMeta },
+    }
+
+    // Always refresh portal claims (needed for existing users + email_exists recovery)
+    const { error: updErr } = await supabase.auth.admin.updateUserById(
+      userId,
+      { app_metadata: appMeta },
+    );
+    if (updErr) {
+      console.error("updateUser app_metadata:", updErr);
+      return new Response(
+        JSON.stringify({ error: "Could not complete sign-in. Try again." }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
       );
-      if (updErr) {
-        console.error("updateUser app_metadata:", updErr);
-        return new Response(
-          JSON.stringify({ error: "Could not complete sign-in. Try again." }),
-          {
-            status: 500,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          },
-        );
-      }
     }
 
     const { data: linkGen, error: generateLinkErr } = await supabase.auth.admin
