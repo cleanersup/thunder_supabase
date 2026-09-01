@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { resolveStoragePublicUrl } from "../_shared/resolveStoragePublicUrl.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -7,8 +8,6 @@ const corsHeaders = {
 };
 
 const BUCKET = "shift-photos";
-/** Signed URL expiry in seconds (1 hour). */
-const SIGNED_URL_TTL = 3600;
 
 interface GetPhotosRequest {
   employee_id: string;
@@ -75,35 +74,22 @@ serve(async (req) => {
       );
     }
 
-    // ── Generate signed URLs in bulk ──────────────────────────────────────────
-    const paths = photos.map((p) => p.storage_path);
-    const { data: signedUrls, error: signedError } = await supabase.storage
-      .from(BUCKET)
-      .createSignedUrls(paths, SIGNED_URL_TTL);
-
-    if (signedError) {
-      console.error("Error generating signed URLs:", signedError);
-    }
-
-    // Build a map of path → signed URL for quick lookup
-    const urlMap = new Map<string, string>();
-    if (signedUrls) {
-      for (const entry of signedUrls) {
-        if (entry.signedUrl) {
-          urlMap.set(entry.path, entry.signedUrl);
-        }
-      }
-    }
-
-    const result = photos.map((p) => ({
-      id: p.id,
-      photo_type: p.photo_type,
-      storage_path: p.storage_path,
-      signed_url: urlMap.get(p.storage_path) ?? null,
-      caption: p.caption,
-      taken_at: p.taken_at,
-      created_at: p.created_at,
-    }));
+    // Same display pattern as dashboard request attachments: public URL from path
+    // (not short-lived signed URLs that embed the internal Kong host).
+    const result = photos.map((p) => {
+      const publicUrl = resolveStoragePublicUrl(BUCKET, p.storage_path);
+      return {
+        id: p.id,
+        photo_type: p.photo_type,
+        storage_path: p.storage_path,
+        public_url: publicUrl,
+        // Keep signed_url for older Crew builds that only read this field.
+        signed_url: publicUrl,
+        caption: p.caption,
+        taken_at: p.taken_at,
+        created_at: p.created_at,
+      };
+    });
 
     console.log(`Returning ${result.length} photos for time_entry ${time_entry_id}`);
 

@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { resolveStoragePublicUrl } from "../_shared/resolveStoragePublicUrl.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -147,10 +148,8 @@ serve(async (req) => {
       );
     }
 
-    // ── Generate a 1-hour signed URL for immediate display ────────────────────
-    const { data: signedUrlData } = await supabase.storage
-      .from(BUCKET)
-      .createSignedUrl(storagePath, 3600);
+    // Same as dashboard request attachments: stable public URL from storage path.
+    const publicUrl = resolveStoragePublicUrl(BUCKET, storagePath);
 
     console.log(`Photo uploaded: ${storagePath} for time_entry ${time_entry_id}`);
 
@@ -162,7 +161,9 @@ serve(async (req) => {
           time_entry_id: photo.time_entry_id,
           photo_type: photo.photo_type,
           storage_path: photo.storage_path,
-          signed_url: signedUrlData?.signedUrl ?? null,
+          public_url: publicUrl,
+          // Keep signed_url for older Crew builds that only read this field.
+          signed_url: publicUrl,
           caption: photo.caption,
           taken_at: photo.taken_at,
           created_at: photo.created_at,
