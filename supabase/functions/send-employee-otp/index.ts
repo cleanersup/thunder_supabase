@@ -1,6 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import * as Sentry from "npm:@sentry/deno";
+import {
+  APP_REVIEW_OTP_CODE,
+  isAppReviewEmployeePhone,
+  normalizePhoneForLookup,
+} from "../_shared/appReviewEmployeeAuth.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -18,19 +23,6 @@ interface SendOTPRequest {
   user_id?: string;      // Optional: filter by company
   employee_id?: string;  // Optional: specific employee ID
 }
-
-// Normalize phone just for employee lookup so it matches how it's stored in DB
-// Example: "+1 (773) 658-5587" -> "7736585587"
-const normalizePhoneForLookup = (phone: string): string => {
-  if (!phone) return phone;
-  // Keep only digits
-  const digits = phone.replace(/\D/g, '');
-  // If it's 11 digits and starts with 1 (US country code), drop the leading 1
-  if (digits.length === 11 && digits.startsWith('1')) {
-    return digits.slice(1);
-  }
-  return digits;
-};
 
 const handler = async (req: Request): Promise<Response> => {
   return await Sentry.withScope(async (scope) => {
@@ -87,40 +79,47 @@ const handler = async (req: Request): Promise<Response> => {
       const supabase = createClient(supabaseUrl, supabaseKey);
       console.log("✅ Supabase client created successfully");
 
+      const isAppReview = isAppReviewEmployeePhone(lookupPhone);
+
       // Rate limiting: Check if an OTP was sent recently (within last 60 seconds)
-      console.log("=== CHECKING RATE LIMIT ===");
-      console.log("[OTP] Checking recent OTPs for phone_number (raw):", phoneNumber);
+      // App Review demo phone skips rate limit so Apple can retry freely.
+      if (!isAppReview) {
+        console.log("=== CHECKING RATE LIMIT ===");
+        console.log("[OTP] Checking recent OTPs for phone_number (raw):", phoneNumber);
 
-      const { data: recentOTP, error: recentOTPError } = await supabase
-        .from('otp_codes')
-        .select('created_at')
-        .eq('phone_number', phoneNumber)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        const { data: recentOTP, error: recentOTPError } = await supabase
+          .from('otp_codes')
+          .select('created_at')
+          .eq('phone_number', phoneNumber)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
 
-      if (recentOTPError) {
-        console.log("⚠️ Error checking rate limit (non-fatal):", recentOTPError);
-      }
+        if (recentOTPError) {
+          console.log("⚠️ Error checking rate limit (non-fatal):", recentOTPError);
+        }
 
-      if (recentOTP && !recentOTPError) {
-        const timeSinceLastOTP = Date.now() - new Date(recentOTP.created_at).getTime();
-        console.log("Last OTP sent:", new Date(recentOTP.created_at).toISOString());
-        console.log("Time since last OTP:", timeSinceLastOTP, "ms");
+        if (recentOTP && !recentOTPError) {
+          const timeSinceLastOTP = Date.now() - new Date(recentOTP.created_at).getTime();
+          console.log("Last OTP sent:", new Date(recentOTP.created_at).toISOString());
+          console.log("Time since last OTP:", timeSinceLastOTP, "ms");
 
-        if (timeSinceLastOTP < 60000) { // 60 seconds
-          const waitTime = Math.ceil((60000 - timeSinceLastOTP) / 1000);
-          console.log(`⏱️ Rate limit hit for ${phoneNumber}. Must wait ${waitTime} more seconds.`);
-          return new Response(
-            JSON.stringify({
-              error: `Please wait ${waitTime} seconds before requesting another code`,
-              retryAfter: waitTime
-            }),
-            { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
+          if (timeSinceLastOTP < 60000) { // 60 seconds
+            const waitTime = Math.ceil((60000 - timeSinceLastOTP) / 1000);
+            console.log(`⏱️ Rate limit hit for ${phoneNumber}. Must wait ${waitTime} more seconds.`);
+            return new Response(
+              JSON.stringify({
+                error: `Please wait ${waitTime} seconds before requesting another code`,
+                retryAfter: waitTime
+              }),
+              { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+        } else {
+          console.log("✅ No rate limit - proceeding with OTP generation");
         }
       } else {
-        console.log("✅ No rate limit - proceeding with OTP generation");
+        console.log("🍎 App Review demo phone — skipping SMS rate limit");
       }
 
       // Check if employee exists with this phone number
@@ -172,10 +171,16 @@ const handler = async (req: Request): Promise<Response> => {
       console.log("[OTP] Employee name:", `${employee.first_name} ${employee.last_name}`);
       console.log("[OTP] Employee phone in DB:", employee.phone);
 
-      // Generate 6-digit OTP code
+      // Generate 6-digit OTP code (fixed for App Review demo phone — no SMS)
       console.log("=== GENERATING OTP CODE ===");
-      const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-      console.log("Generated OTP code:", otpCode);
+      const otpCode = isAppReview
+        ? APP_REVIEW_OTP_CODE
+        : Math.floor(100000 + Math.random() * 900000).toString();
+      console.log(
+        isAppReview
+          ? "🍎 App Review fixed OTP code (SMS skipped)"
+          : `Generated OTP code: ${otpCode}`,
+      );
 
       // Set expiration to 10 minutes from now
       const expiresAt = new Date();
@@ -203,6 +208,21 @@ const handler = async (req: Request): Promise<Response> => {
       }
 
       console.log("✅ OTP saved to database successfully");
+
+      // App Review: do not send SMS — reviewers use the fixed code from Review Notes
+      if (isAppReview) {
+        console.log(
+          `🍎 App Review OTP ready for ${lookupPhone} (employee ${employee.id}) — Twilio skipped`,
+        );
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message: 'OTP code sent successfully',
+            expiresAt: expiresAt.toISOString(),
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        );
+      }
 
       // Send SMS via Twilio
       console.log("=== CHECKING TWILIO CREDENTIALS ===");
