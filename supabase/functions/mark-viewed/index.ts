@@ -19,8 +19,17 @@ Sentry.init({
   tracesSampleRate: 0.1,
 });
 
+type MarkViewedType = "estimate" | "invoice" | "contract" | "quick_quote";
+
+const TABLE_BY_TYPE: Record<MarkViewedType, string> = {
+  estimate: "estimates",
+  invoice: "invoices",
+  contract: "contracts",
+  quick_quote: "quick_quotes",
+};
+
 interface MarkViewedRequest {
-  type: "estimate" | "invoice" | "contract";
+  type: MarkViewedType;
   id: string;
 }
 
@@ -36,7 +45,7 @@ serve(async (req) => {
     try {
       // Parse URL to get query parameters (for tracking pixel GET requests)
       const url = new URL(req.url);
-      const type = url.searchParams.get("type") as "estimate" | "invoice" | "contract" | null;
+      const type = url.searchParams.get("type") as MarkViewedType | null;
       const id = url.searchParams.get("id");
 
       console.log(`[mark-viewed] Function invoked. Type: ${type}, ID: ${id}`);
@@ -46,9 +55,9 @@ serve(async (req) => {
         throw new Error("Missing required parameters: type and id");
       }
 
-      if (type !== "estimate" && type !== "invoice" && type !== "contract") {
+      if (!TABLE_BY_TYPE[type]) {
         console.error("[mark-viewed] Invalid type:", type);
-        throw new Error("Invalid type: use estimate, invoice, or contract");
+        throw new Error("Invalid type: use estimate, invoice, contract, or quick_quote");
       }
 
       // Create Supabase client
@@ -56,13 +65,11 @@ serve(async (req) => {
       const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
       const supabase = createClient(supabaseUrl, supabaseKey);
 
-      const tableName = type === "estimate"
-        ? "estimates"
-        : type === "invoice"
-        ? "invoices"
-        : "contracts";
+      const tableName = TABLE_BY_TYPE[type];
 
-      const selectColumns = type === "contract" ? "viewed_at, status" : "viewed_at";
+      const selectColumns = type === "contract" || type === "quick_quote"
+        ? "viewed_at, status"
+        : "viewed_at";
 
       // Check if already viewed
       console.log(`[mark-viewed] Fetching record from ${tableName} for ID ${id}`);
@@ -83,6 +90,13 @@ serve(async (req) => {
 
         if (type === "estimate") {
           updates.status = "Viewed";
+        }
+        if (type === "quick_quote") {
+          // Never downgrade a quote that already moved on (Accepted, Converted…).
+          const st = (existing as { status?: string }).status;
+          if (!st || st === "Draft" || st === "Pending" || st === "Sent") {
+            updates.status = "Viewed";
+          }
         }
         if (type === "contract") {
           const st = (existing as { status?: string }).status;
