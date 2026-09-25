@@ -265,7 +265,7 @@ const EMAIL_FOOTER = `<div style="text-align:center;padding:15px;background:#1e3
 
 function formatClientActionButtons(acceptUrl: string, quoteUrl: string | null): string {
   return `<div style="text-align:center;margin:30px 0">
-<a href="${acceptUrl}" style="display:inline-block;background:#10b981;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">Accept Estimate</a>
+<a href="${acceptUrl}" style="display:inline-block;background:#10b981;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">Accept Quote</a>
 ${quoteUrl ? `<a href="${quoteUrl}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">View Quote</a>` : ''}
 </div>`;
 }
@@ -287,7 +287,7 @@ ${EMAIL_HEAD}
 
 <div class="email-body" style="text-align:center;padding:15px;background:#1e3a8a;color:white">
 <h1 style="margin:0;font-size:22px">${companyName}</h1>
-<p style="margin:5px 0">Professional Cleaning Estimate</p>
+<p style="margin:5px 0">Professional Cleaning Quote</p>
 </div>
 
 <div class="email-content" style="padding:15px">
@@ -335,7 +335,7 @@ ${EMAIL_HEAD}
 <div class="email-body" style="text-align:center;padding:15px;background:#1e3a8a;color:white">
 <p style="margin:0;font-size:14px;font-weight:bold;background:#1e40af;padding:8px;border-radius:4px">OWNER COPY - INTERNAL USE ONLY</p>
 <h1 style="margin:10px 0 0 0;font-size:22px">${companyName}</h1>
-<p style="margin:5px 0">Professional Cleaning Estimate</p>
+<p style="margin:5px 0">Professional Cleaning Quote</p>
 </div>
 
 <div class="email-content" style="padding:15px">
