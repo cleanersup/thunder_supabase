@@ -4,7 +4,7 @@ Un **quick quote** es un estimate residencial sin cliente y sin dirección de
 servicio: el dueño cotiza en el momento y escribe el email o el teléfono del
 destinatario solo al enviarlo. Todo lo demás (desglose de servicios, precios,
 desglose interno de costos, borradores, share token, tracking de vistas, conversión
-a job) se comporta igual que un estimate residencial.
+a job o a invoice) se comporta igual que un estimate residencial.
 
 Piezas del backend:
 
@@ -15,7 +15,8 @@ Piezas del backend:
 | SMS | `send-quick-quote-sms` |
 | Aceptar (público) | `accept-quick-quote` (`GET ?id=`) |
 | Tracking de vistas | `mark-viewed` (se agregó `type=quick_quote`) |
-| RPCs | `get_public_quick_quote`, `generate_quick_quote_share_token`, `get_quick_quote_job_prefill`, `finalize_quick_quote_to_job_conversion` |
+| Realtime | `supabase_realtime` publica `quick_quotes` (y `contracts`) |
+| RPCs | `get_public_quick_quote`, `generate_quick_quote_share_token`, `get_quick_quote_job_prefill`, `finalize_quick_quote_to_job_conversion`, `get_quick_quote_invoice_prefill`, `finalize_quick_quote_to_invoice_conversion` |
 
 ---
 
@@ -52,13 +53,16 @@ completamente vacío (`insert { }`) es válido y toma los valores por defecto.
 | `viewed_at` | timestamptz | – | lo marca el pixel de tracking / la lectura pública |
 | `sent_at` | timestamptz | – | lo escriben las funciones de envío |
 | `last_sent_channel` | text | – | `email` \| `sms` |
-| `job_id` | uuid | – | lo setea el RPC de conversión |
+| `job_id` | uuid | – | lo setea el RPC de conversión a job |
+| `invoice_id` | uuid | – | lo setea el RPC de conversión a invoice |
 | `created_at` / `updated_at` | timestamptz | `now()` | `updated_at` lo mantiene un trigger |
 
 **Valores de status** (texto libre, igual que `estimates.status`): `Draft`,
-`Pending`, `Sent`, `Viewed`, `Accepted`, `Declined`, `Converted`, `Canceled`.
-`Sent` lo escriben las funciones de envío, `Viewed` lo escribe `mark-viewed` y
-`Converted` el RPC de conversión — el resto lo maneja el frontend.
+`Pending`, `Sent`, `Viewed`, `Accepted`, `Declined`, `Converted`, `Invoiced`, `Canceled`.
+`Sent` lo escriben las funciones de envío, `Viewed` lo escribe `mark-viewed`,
+`Converted` el RPC a job e `Invoiced` el RPC a invoice. Si el quote ya era
+`Converted` y luego se factura, el status se queda en `Converted`. El resto lo
+maneja el frontend.
 
 Los campos que sí tiene el estimate residencial y que quick quotes **no** tiene:
 `client_id`, `lead_id`, `client_name`, `company_name`, `email`, `phone`, `address`,
@@ -229,3 +233,48 @@ el mismo par no hace nada.
 Un job sigue aceptando como máximo una fuente: `jobs_single_source_check` ahora cubre
 `estimate_id`, `walkthrough_id` y `quick_quote_id`. Borrar un quick quote deja
 `jobs.quick_quote_id` en NULL — el job sobrevive.
+
+## 6. Convertir a invoice
+
+Misma forma que quote→job. El quote no tiene cliente ni dirección; esos campos
+salen del formulario de “Complete Invoice Details” (y se guardan también como
+cliente). Job e invoice son independientes: un quote puede tener los dos.
+
+```ts
+const { data: prefill } = await supabase
+  .rpc("get_quick_quote_invoice_prefill", { p_quick_quote_id: quote.id });
+
+const { data: invoice } = await supabase
+  .from("invoices")
+  .insert({
+    ...prefill,
+    user_id: user.id,
+    invoice_number: nextNumber,
+    client_name, email, phone, address, apt, city, state, zip,
+    quick_quote_id: quote.id,
+    status: "Draft",
+  })
+  .select("id")
+  .single();
+
+const { error } = await supabase.rpc("finalize_quick_quote_to_invoice_conversion", {
+  p_quick_quote_id: quote.id,
+  p_invoice_id: invoice.id,
+});
+if (error) await supabase.from("invoices").delete().eq("id", invoice.id);
+```
+
+`get_quick_quote_invoice_prefill` devuelve: `quick_quote_id`, `client_name` /
+`email` / `phone` (del destinatario), `service_type: 'Single Payment'`,
+`invoice_name` (`service_sub_type` o `service_type`), `invoice_date` y `due_date`
+(`quote_date`), un `line_items` con la descripción del `service_scope` y el
+subtotal, `discount_type` (`percentage` | `fixed`) / `discount_value`, `tax_rate`
+nulo, `total` (`quick_quote_display_total`) y `notes` (`service_scope`).
+
+`finalize_quick_quote_to_invoice_conversion` setea `invoices.quick_quote_id` y
+`quick_quotes.invoice_id`, marca `is_draft=false` y el status `Invoiced` salvo
+que ya fuera `Converted`. Lanza error si no hay sesión, no es el dueño, el quote
+ya está vinculado a otra invoice, o la invoice ya tiene otra fuente. Volver a
+llamarlo con el mismo par no rompe nada.
+
+Borrar el quote deja `invoices.quick_quote_id` en NULL — la invoice sobrevive.
