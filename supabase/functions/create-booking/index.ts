@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { getUserCountry, resolveCountryCode } from "../_shared/userCountry.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -107,6 +108,7 @@ serve(async (req) => {
     let city: string | null = null;
     let state: string | null = null;
     let zip_code: string | null = null;
+    let country: string | null = null;
     let preferred_date: string | null = null;
     let time_preference: string | null = null;
     let bedrooms: number | null = null;
@@ -133,6 +135,7 @@ serve(async (req) => {
       city = (formData.get("city") as string | null)?.trim() || null;
       state = (formData.get("state") as string | null)?.trim() || null;
       zip_code = (formData.get("zip_code") as string | null)?.trim() || null;
+      country = (formData.get("country") as string | null)?.trim() || null;
       preferred_date = (formData.get("preferred_date") as string | null)?.trim() || null;
       time_preference = (formData.get("time_preference") as string | null)?.trim() || null;
       bedrooms = parseIntegerOrNull(formData.get("bedrooms"));
@@ -159,6 +162,7 @@ serve(async (req) => {
       city = body.city ?? null;
       state = body.state ?? null;
       zip_code = body.zip_code ?? null;
+      country = typeof body.country === "string" ? body.country : null;
       preferred_date = body.preferred_date ?? null;
       time_preference = body.time_preference ?? null;
       bedrooms = parseIntegerOrNull(body.bedrooms);
@@ -189,6 +193,9 @@ serve(async (req) => {
       );
     }
 
+    const ownerCountry = await getUserCountry(supabase, business_owner_id);
+    const resolvedCountry = resolveCountryCode(country, ownerCountry.code);
+
     const { data, error } = await supabase
       .from('bookings')
       .insert({
@@ -203,6 +210,7 @@ serve(async (req) => {
         city,
         state,
         zip_code,
+        country: resolvedCountry,
         preferred_date: preferred_date || null,
         time_preference: time_preference || null,
         bedrooms,

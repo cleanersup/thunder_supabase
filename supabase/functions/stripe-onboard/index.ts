@@ -5,6 +5,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import Stripe from "https://esm.sh/stripe@14.14.0?target=deno";
+import { getUserCountry, resolveCountryCode } from "../_shared/userCountry.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -21,7 +22,7 @@ serve(async (req) => {
   try {
     // Read request body early — allows web clients to pass a custom returnUrl
     // so Stripe redirects back to the correct frontend domain (web vs mobile)
-    let requestBody: { returnUrl?: string } = {};
+    let requestBody: { returnUrl?: string; country?: string } = {};
     try {
       const text = await req.text();
       if (text) requestBody = JSON.parse(text);
@@ -75,6 +76,8 @@ serve(async (req) => {
     const stripeReturnUrl = requestBody.returnUrl || `${appUrl}/stripe-return`;
 
     let accountId = profile.stripe_account_id;
+    const userCountry = await getUserCountry(supabase, user.id);
+    const stripeCountry = resolveCountryCode(requestBody.country, userCountry.country).toUpperCase();
 
     // Case 1: User doesn't have a Stripe account - create new one
     if (!accountId) {
@@ -82,7 +85,7 @@ serve(async (req) => {
 
       const account = await stripe.accounts.create({
         type: "express", // or "standard" - Express is simpler for most cases
-        country: "US", // You can make this dynamic based on user's country
+        country: stripeCountry,
         email: user.email,
         capabilities: {
           card_payments: { requested: true },
@@ -121,7 +124,7 @@ serve(async (req) => {
         // Account doesn't exist anymore, create a new one
         const account = await stripe.accounts.create({
           type: "express",
-          country: "US",
+          country: stripeCountry,
           email: user.email,
           capabilities: {
             card_payments: { requested: true },

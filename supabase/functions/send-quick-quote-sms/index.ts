@@ -8,7 +8,7 @@
 
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import * as Sentry from "npm:@sentry/deno";
-import { resolvePublicAppUrl } from "../_shared/resolvePublicAppUrl.ts";
+import { resolveQuickQuoteViewUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -25,7 +25,7 @@ interface QuickQuoteSMSRequest {
   phoneNumber: string;
   quickQuoteId?: string;
   recipientName?: string;
-  /** Overrides the default public quote link. */
+  /** Ignored. View Quote always uses staging.thunderpro.co / thunderpro.co. */
   quoteUrl?: string;
   quoteTotal?: number;
   isUpdate?: boolean;
@@ -75,14 +75,13 @@ serve(async (req) => {
         phoneNumber,
         quickQuoteId,
         recipientName,
-        quoteUrl,
         quoteTotal,
         isUpdate,
       }: QuickQuoteSMSRequest = await req.json();
 
       if (!phoneNumber) throw new Error('Phone number is required');
-      if (!quickQuoteId && !quoteUrl) {
-        throw new Error('Either quickQuoteId or quoteUrl is required');
+      if (!quickQuoteId) {
+        throw new Error('quickQuoteId is required');
       }
 
       const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2.76.1');
@@ -103,13 +102,11 @@ serve(async (req) => {
         quote = data ?? null;
       }
 
-      const resolvedUrl = quoteUrl
-        ?? (quote?.public_share_token
-          ? `${resolvePublicAppUrl()}/public/quick-quote/${quote.public_share_token}`
-          : null);
+      const resolvedUrl = resolveQuickQuoteViewUrl(quote ?? {});
+      console.log("Quick quote View Quote URL:", resolvedUrl);
 
       if (!resolvedUrl) {
-        throw new Error('Quote URL is required (quote has no public share token)');
+        throw new Error('Quick quote not found');
       }
 
       const accountSid = Deno.env.get('TWILIO_ACCOUNT_SID');

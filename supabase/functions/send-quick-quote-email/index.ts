@@ -10,7 +10,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
-import { resolvePublicAppUrl } from "../_shared/resolvePublicAppUrl.ts";
+import { resolveQuickQuoteViewUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -28,7 +28,7 @@ interface QuickQuoteEmailRequest {
   quoteData?: any;
   recipientEmail: string;
   recipientName?: string;
-  /** Overrides the default public quote link used by the "View Quote" button. */
+  /** Ignored. View Quote always uses staging.thunderpro.co / thunderpro.co. */
   publicUrl?: string;
   isUpdate?: boolean;
 }
@@ -503,7 +503,6 @@ const handler = async (req: Request): Promise<Response> => {
         quoteData,
         recipientEmail,
         recipientName,
-        publicUrl,
         isUpdate,
       }: QuickQuoteEmailRequest = await req.json();
 
@@ -556,11 +555,11 @@ const handler = async (req: Request): Promise<Response> => {
       const trackingPixelUrl =
         `${publicSupabaseUrl}/functions/v1/mark-viewed?type=quick_quote&id=${quote.id}`;
 
-      const quoteUrl = publicUrl
-        ?? (quote.public_share_token
-          ? `${resolvePublicAppUrl()}/public/quick-quote/${quote.public_share_token}`
-          : null);
+      // Always the dashboard View Quote URL. Ignore client publicUrl — it often
+      // points at app.staging / portal, which 404 the quote page.
+      const quoteUrl = resolveQuickQuoteViewUrl(quote);
       const acceptUrl = `${publicSupabaseUrl}/functions/v1/accept-quick-quote?id=${quote.id}`;
+      console.log("Quick quote View Quote URL:", quoteUrl);
 
       const clientSubject = isUpdate
         ? `You have an Updated quote - ${companyName}`

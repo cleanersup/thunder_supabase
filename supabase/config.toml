@@ -241,3 +241,9 @@ verify_jwt = false
 
 [functions.register-user-device-token]
 verify_jwt = true
+
+[functions.geocode-address]
+verify_jwt = true
+
+[functions.me-country]
+verify_jwt = true

@@ -136,9 +136,10 @@ Comportamiento:
   (azul), igual que el estimate residencial. Accept apunta a
   `${PUBLIC_SUPABASE_URL}/functions/v1/accept-quick-quote?id=<id>`. View Quote
   apunta a `publicUrl` o a
-  `${PUBLIC_APP_URL}/public/quick-quote/<public_share_token>` — hay que crear esa
-  ruta, o mandar `publicUrl` si prefieres otro path. Si no hay URL pública, solo se
-  muestra Accept.
+  `https://staging.thunderpro.co/public/quick-quote/<id o token>` en staging, o
+  `https://thunderpro.co/public/quick-quote/<public_share_token>` en producción.
+  El host está hardcodeado (no usa PUBLIC_APP_URL). `publicUrl` del request se
+  ignora. Si no hay URL pública, solo se muestra Accept.
 - Después de un envío exitoso escribe `sent_at`, `last_sent_channel='email'`,
   `recipient_email`, `is_draft=false`, y pasa `status` a `Sent` solo si estaba en
   `Draft`/`Pending`/null. Si esa escritura falla, el envío no falla.
@@ -168,9 +169,8 @@ responde "Estimate not found".
 await supabase.functions.invoke("send-quick-quote-sms", {
   body: {
     phoneNumber: "3055551234",  // requerido — lo escribe el usuario
-    quickQuoteId: quote.id,     // requerido salvo que se mande quoteUrl
+    quickQuoteId: quote.id,     // requerido
     recipientName: "Jane Doe",  // opcional, el saludo cae a "Hi there"
-    quoteUrl: undefined,        // opcional, reemplaza el link
     quoteTotal: undefined,      // opcional; si no, se calcula del quote
     isUpdate: false,
   },

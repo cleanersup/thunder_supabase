@@ -3,6 +3,7 @@
 
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { resolveRecordCountry } from "../_shared/userCountry.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -17,6 +18,7 @@ type PropertyPayload = {
   city: string;
   state: string;
   zip_code: string;
+  country?: string | null;
   is_primary?: boolean;
 };
 
@@ -126,6 +128,8 @@ serve(async (req) => {
       const access = await assertClientExists(supabase, user.id, body.clientId);
       if ("error" in access && access.error) return access.error;
 
+      const country = await resolveRecordCountry(supabase, user.id, body.property.country);
+
       const { data, error } = await supabase
         .from("client_properties")
         .insert({
@@ -137,6 +141,7 @@ serve(async (req) => {
           city: body.property.city,
           state: body.property.state,
           zip_code: body.property.zip_code,
+          country,
           is_primary: body.property.is_primary ?? false,
         })
         .select()
@@ -158,6 +163,8 @@ serve(async (req) => {
       const existing = await getPropertyForUser(supabase, user.id, body.propertyId);
       if ("error" in existing && existing.error) return existing.error;
 
+      const country = await resolveRecordCountry(supabase, user.id, body.property.country);
+
       const { data, error } = await supabase
         .from("client_properties")
         .update({
@@ -167,6 +174,7 @@ serve(async (req) => {
           city: body.property.city,
           state: body.property.state,
           zip_code: body.property.zip_code,
+          country,
           is_primary: body.property.is_primary ?? false,
         })
         .eq("id", body.propertyId)
