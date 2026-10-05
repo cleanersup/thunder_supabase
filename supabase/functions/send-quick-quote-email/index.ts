@@ -10,7 +10,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
-import { resolveQuickQuoteViewUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -28,7 +27,7 @@ interface QuickQuoteEmailRequest {
   quoteData?: any;
   recipientEmail: string;
   recipientName?: string;
-  /** Ignored. View Quote always uses staging.thunderpro.co / thunderpro.co. */
+  /** Ignored. Download PDF is built from the quote id / share token. */
   publicUrl?: string;
   isUpdate?: boolean;
 }
@@ -263,10 +262,10 @@ const EMAIL_FOOTER = `<div style="text-align:center;padding:15px;background:#1e3
 
 // ─── Templates ────────────────────────────────────────────────────────────────
 
-function formatClientActionButtons(acceptUrl: string, quoteUrl: string | null): string {
+function formatClientActionButtons(acceptUrl: string, downloadPdfUrl: string | null): string {
   return `<div style="text-align:center;margin:30px 0">
 <a href="${acceptUrl}" style="display:inline-block;background:#10b981;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">Accept Quote</a>
-${quoteUrl ? `<a href="${quoteUrl}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">View Quote</a>` : ''}
+${downloadPdfUrl ? `<a href="${downloadPdfUrl}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">Download PDF</a>` : ''}
 </div>`;
 }
 
@@ -275,7 +274,7 @@ function generateQuickQuoteClientEmailTemplate(
   companyName: string,
   recipientEmail: string,
   recipientName: string | undefined,
-  quoteUrl: string | null,
+  downloadPdfUrl: string | null,
   acceptUrl: string,
   trackingPixelUrl: string,
 ): string {
@@ -300,7 +299,7 @@ ${formatServiceBreakdown(quote)}
 
 ${formatPricingSection(quote)}
 
-${formatClientActionButtons(acceptUrl, quoteUrl)}
+${formatClientActionButtons(acceptUrl, downloadPdfUrl)}
 
 </div>
 
@@ -319,7 +318,7 @@ function generateQuickQuoteOwnerEmailTemplate(
   companyName: string,
   recipientEmail: string,
   recipientName: string | undefined,
-  quoteUrl: string | null,
+  downloadPdfUrl: string | null,
 ): string {
   const total = resolveQuoteDisplayTotal(quote);
   const operationCost = Number(quote.total_operation_cost) || 0;
@@ -359,8 +358,8 @@ ${formatServiceBreakdown(quote)}
 
 ${formatPricingSection(quote)}
 
-${quoteUrl ? `<div style="text-align:center;margin:30px 0">
-<a href="${quoteUrl}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">View Quote</a>
+${downloadPdfUrl ? `<div style="text-align:center;margin:30px 0">
+<a href="${downloadPdfUrl}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">Download PDF</a>
 </div>` : ''}
 
 </div>
@@ -555,11 +554,14 @@ const handler = async (req: Request): Promise<Response> => {
       const trackingPixelUrl =
         `${publicSupabaseUrl}/functions/v1/mark-viewed?type=quick_quote&id=${quote.id}`;
 
-      // Always the dashboard View Quote URL. Ignore client publicUrl — it often
-      // points at app.staging / portal, which 404 the quote page.
-      const quoteUrl = resolveQuickQuoteViewUrl(quote);
+      // Same Download PDF endpoint as estimate emails. The SPA View Quote URL
+      // (staging.thunderpro.co/public/...) is the API host, so it never shows the quote.
+      const pdfToken = quote.public_share_token || quote.id;
+      const downloadPdfUrl = pdfToken
+        ? `${publicSupabaseUrl}/functions/v1/download-estimate-pdf?token=${encodeURIComponent(pdfToken)}`
+        : null;
       const acceptUrl = `${publicSupabaseUrl}/functions/v1/accept-quick-quote?id=${quote.id}`;
-      console.log("Quick quote View Quote URL:", quoteUrl);
+      console.log("Quick quote Download PDF URL:", downloadPdfUrl);
 
       const clientSubject = isUpdate
         ? `You have an Updated quote - ${companyName}`
@@ -569,10 +571,10 @@ const handler = async (req: Request): Promise<Response> => {
         : `A quote was sent to ${recipientName || recipientEmail}`;
 
       const clientHtml = generateQuickQuoteClientEmailTemplate(
-        quote, companyName, recipientEmail, recipientName, quoteUrl, acceptUrl, trackingPixelUrl,
+        quote, companyName, recipientEmail, recipientName, downloadPdfUrl, acceptUrl, trackingPixelUrl,
       );
       const ownerHtml = generateQuickQuoteOwnerEmailTemplate(
-        quote, companyName, recipientEmail, recipientName, quoteUrl,
+        quote, companyName, recipientEmail, recipientName, downloadPdfUrl,
       );
 
       console.log(`Sending quick quote ${quote.id} to ${recipientEmail}`);
@@ -605,7 +607,7 @@ const handler = async (req: Request): Promise<Response> => {
           message: 'Emails sent successfully',
           recipient: recipientEmail,
           ownerCopied: !!ownerEmail,
-          quoteUrl,
+          quoteUrl: downloadPdfUrl,
         }),
         { status: 200, headers: { 'Content-Type': 'application/json', ...corsHeaders } },
       );

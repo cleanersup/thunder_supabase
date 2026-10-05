@@ -371,7 +371,12 @@ async function generateEstimatePDF(estimate: any, profile: any): Promise<Uint8Ar
   doc.text(companyName, pageWidth / 2, yPosition + 10, { align: 'center' });
   doc.setFontSize(11);
   doc.setFont('helvetica', 'normal');
-  doc.text('Professional Cleaning Estimate', pageWidth / 2, yPosition + 18, { align: 'center' });
+  doc.text(
+    estimate.pdf_subtitle || 'Professional Cleaning Estimate',
+    pageWidth / 2,
+    yPosition + 18,
+    { align: 'center' },
+  );
   yPosition = 35;
 
   // ===== CONTENT AREA =====
@@ -413,7 +418,11 @@ async function generateEstimatePDF(estimate: any, profile: any): Promise<Uint8Ar
   doc.setFont('helvetica', 'bold');
   doc.text('Address:', margin, yPosition);
   doc.setFont('helvetica', 'normal');
-  const address = `${estimate.address}${estimate.apt ? `, ${estimate.apt}` : ''}, ${estimate.city}, ${estimate.state} ${estimate.zip}`;
+  const addressBits = [
+    [estimate.address, estimate.apt].filter(Boolean).join(', '),
+    [estimate.city, [estimate.state, estimate.zip].filter(Boolean).join(' ')].filter(Boolean).join(', '),
+  ].filter(Boolean);
+  const address = addressBits.join(', ') || 'N/A';
   doc.text(address, margin + 25, yPosition);
   yPosition += 12;
 
@@ -857,6 +866,46 @@ serve(async (req: Request): Promise<Response> => {
         estimateError = idError;
       }
 
+      let isQuickQuote = false;
+
+      if (estimateError || !estimate) {
+        // Same public Download PDF URL as estimates: token may be a quick quote
+        // share token or id. Estimate lookup stays first so estimate emails are unchanged.
+        const { data: quoteByToken } = await supabase
+          .from('quick_quotes')
+          .select('*')
+          .eq('public_share_token', token)
+          .maybeSingle();
+
+        let quote = quoteByToken;
+        if (!quote && isUuid) {
+          const { data: quoteById } = await supabase
+            .from('quick_quotes')
+            .select('*')
+            .eq('id', token)
+            .maybeSingle();
+          quote = quoteById;
+        }
+
+        if (quote) {
+          isQuickQuote = true;
+          estimate = {
+            ...quote,
+            client_name: quote.recipient_name || '',
+            email: quote.recipient_email || '',
+            phone: quote.recipient_phone || '',
+            address: '',
+            apt: '',
+            city: '',
+            state: '',
+            zip: '',
+            estimate_date: quote.quote_date,
+            pdf_subtitle: 'Professional Cleaning Quote',
+          };
+          estimateError = null;
+        }
+      }
+
       if (estimateError || !estimate) {
         return new Response(
           JSON.stringify({ error: 'Estimate not found' }),
@@ -875,9 +924,10 @@ serve(async (req: Request): Promise<Response> => {
         console.error('Error fetching profile:', profileError);
       }
 
-      // Determine which PDF generator to use based on service type
-      const isCommercial = estimate.service_type === 'Commercial';
-      console.log(`Generating PDF for ${isCommercial ? 'Commercial' : 'Residential'} estimate`);
+      // Quick quotes use the residential generator (no client/address). Estimates
+      // keep their commercial vs residential split.
+      const isCommercial = !isQuickQuote && estimate.service_type === 'Commercial';
+      console.log(`Generating PDF for ${isQuickQuote ? 'Quick Quote' : isCommercial ? 'Commercial' : 'Residential'} estimate`);
 
       // Generate PDF using the appropriate generator
       const pdfBytes = isCommercial
@@ -885,7 +935,7 @@ serve(async (req: Request): Promise<Response> => {
         : await generateEstimatePDF(estimate, profile || {});
 
       // Determine filename based on estimate type
-      const filenamePrefix = isCommercial ? 'Commercial_Proposal' : 'Estimate';
+      const filenamePrefix = isQuickQuote ? 'Quote' : isCommercial ? 'Commercial_Proposal' : 'Estimate';
       const filename = `${filenamePrefix}_${estimate.id.substring(0, 8).toUpperCase()}.pdf`;
 
       // Return PDF as download
