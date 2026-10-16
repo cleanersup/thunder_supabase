@@ -85,6 +85,46 @@ async function uploadBookingFiles(
   return uploaded;
 }
 
+/**
+ * True when the request comes from the business owner themself (dashboard /
+ * app "Add Request") and their plan does not include Requests.
+ *
+ * The public booking form calls this function with the anon key, so there is
+ * no user and it is never blocked: a prospect filling the owner's form is not
+ * the owner using a feature. Fails open if the plan check is unavailable.
+ */
+async function ownerLacksRequestsPlan(req: Request, businessOwnerId: string): Promise<boolean> {
+  const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
+  if (!token) return false;
+
+  const supabaseUser = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+    { global: { headers: { Authorization: `Bearer ${token}` } } },
+  );
+
+  const { data: { user } } = await supabaseUser.auth.getUser(token);
+  if (!user || user.id !== businessOwnerId) return false;
+
+  const { data, error } = await supabaseUser.rpc("has_plan_feature", { feature: "requests" });
+  if (error) {
+    console.warn("[create-booking] plan check unavailable, allowing:", error.message);
+    return false;
+  }
+  return data === false;
+}
+
+function planUpgradeRequiredResponse(): Response {
+  return new Response(
+    JSON.stringify({
+      error: "Your current plan does not include this feature. Upgrade your plan to continue.",
+      code: "PLAN_UPGRADE_REQUIRED",
+      feature: "requests",
+    }),
+    { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+  );
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -148,6 +188,9 @@ serve(async (req) => {
       custom_answers = parseJsonField<Record<string, unknown>>(formData.get("custom_answers"), {});
 
       if (business_owner_id) {
+        if (await ownerLacksRequestsPlan(req, business_owner_id)) {
+          return planUpgradeRequiredResponse();
+        }
         attachments = await uploadBookingFiles(supabase, formData, business_owner_id, bookingId);
       }
     } else {
@@ -176,6 +219,10 @@ serve(async (req) => {
         : {};
       status = body.status || 'new';
       attachments = Array.isArray(body.attachments) ? body.attachments : [];
+
+      if (business_owner_id && await ownerLacksRequestsPlan(req, business_owner_id)) {
+        return planUpgradeRequiredResponse();
+      }
     }
 
     if (!business_owner_id || !lead_name || !email || !phone || !street || !city || !state || !zip_code || !service_type) {
