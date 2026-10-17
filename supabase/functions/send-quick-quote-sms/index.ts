@@ -103,7 +103,11 @@ serve(async (req) => {
       }
 
       const resolvedUrl = resolveQuickQuoteViewUrl(quote ?? {});
-      console.log("Quick quote View Quote URL:", resolvedUrl);
+      console.log("quickquote url", resolvedUrl, {
+        quickQuoteId,
+        quoteId: quote?.id ?? null,
+        publicShareToken: quote?.public_share_token ?? null,
+      });
 
       if (!resolvedUrl) {
         throw new Error('Quick quote not found');

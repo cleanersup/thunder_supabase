@@ -1,5 +1,5 @@
 const STAGING_QUOTE_HOST = "https://staging.thunderpro.co";
-const PRODUCTION_QUOTE_HOST = "https://thunderpro.co";
+const PRODUCTION_QUOTE_HOST = "https://dashboard.thunderpro.co";
 
 function env(name: string): string {
   const deno = (globalThis as {
@@ -16,9 +16,11 @@ function env(name: string): string {
  * dashboard that serves the quote. Edge functions inside Docker also see
  * SUPABASE_URL=http://kong:8000, so "staging" may be missing from env.
  *
- * Staging only when ENVIRONMENT or an API URL says so. Default is production:
- * the previous default (staging) sent production SMS to
- * staging.thunderpro.co, which 404s because the quote lives in the prod DB.
+ * Staging only when ENVIRONMENT or an API URL says so. Default is
+ * dashboard.thunderpro.co — that is the production thunder_dashboard, the
+ * only production host that has /public/quick-quote/:token.
+ * thunderpro.co is the marketing site (404). portal.thunderpro.co is the
+ * owner app (also 404).
  */
 export function resolveQuickQuoteHost(
   environment = env("ENVIRONMENT"),
