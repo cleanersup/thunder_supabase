@@ -16,8 +16,9 @@ function env(name: string): string {
  * dashboard that serves the quote. Edge functions inside Docker also see
  * SUPABASE_URL=http://kong:8000, so "staging" may be missing from env.
  *
- * Staging unless ENVIRONMENT is production/prod, or the API URL is the
- * production portal and does not mention staging.
+ * Staging only when ENVIRONMENT or an API URL says so. Default is production:
+ * the previous default (staging) sent production SMS to
+ * staging.thunderpro.co, which 404s because the quote lives in the prod DB.
  */
 export function resolveQuickQuoteHost(
   environment = env("ENVIRONMENT"),
@@ -34,14 +35,8 @@ export function resolveQuickQuoteHost(
   if (blob.includes("staging")) {
     return STAGING_QUOTE_HOST;
   }
-  if (envName === "production" || envName === "prod") {
-    return PRODUCTION_QUOTE_HOST;
-  }
-  if (blob.includes("portal.thunderpro.co")) {
-    return PRODUCTION_QUOTE_HOST;
-  }
 
-  return STAGING_QUOTE_HOST;
+  return PRODUCTION_QUOTE_HOST;
 }
 
 /**

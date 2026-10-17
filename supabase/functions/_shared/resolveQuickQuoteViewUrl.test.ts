@@ -24,8 +24,8 @@ test("View Quote host is thunderpro.co for the production portal API", () => {
   );
 });
 
-test("View Quote host defaults to staging when Docker only has kong", () => {
-  assert.equal(resolveQuickQuoteHost("", "http://kong:8000"), "https://staging.thunderpro.co");
+test("View Quote host defaults to production when Docker only has kong", () => {
+  assert.equal(resolveQuickQuoteHost("", "http://kong:8000"), "https://thunderpro.co");
 });
 
 test("View Quote URL uses /public/quick-quote/ on the hardcoded host", () => {
