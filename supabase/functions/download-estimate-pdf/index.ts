@@ -335,482 +335,296 @@ async function generateCommercialProposalPDF(estimate: any, profile: any): Promi
 
 // Generate PDF using jsPDF
 // This function creates a PDF matching the email design exactly (without buttons)
-async function generateEstimatePDF(estimate: any, profile: any): Promise<Uint8Array> {
-  // Import jsPDF dynamically for Deno Edge Functions
-  const jsPDF = (await import('https://esm.sh/jspdf@2.5.1')).default;
+async function loadLogoForPdf(src: string | null | undefined): Promise<{ data: string; format: string } | null> {
+  if (!src) return null;
+  if (src.startsWith('data:image/png')) return { data: src, format: 'PNG' };
+  if (src.startsWith('data:image/jpeg') || src.startsWith('data:image/jpg')) return { data: src, format: 'JPEG' };
+  if (!src.startsWith('http')) return null;
+  try {
+    const res = await fetch(src);
+    if (!res.ok) return null;
+    const type = (res.headers.get('content-type') || '').toLowerCase();
+    const format = type.includes('png') ? 'PNG' : type.includes('jpeg') || type.includes('jpg') ? 'JPEG' : null;
+    if (!format) return null;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    }
+    return { data: `data:${format === 'PNG' ? 'image/png' : 'image/jpeg'};base64,${btoa(binary)}`, format };
+  } catch {
+    return null;
+  }
+}
 
-  const doc = new jsPDF();
+function formatSheetPhone(raw: string): string {
+  if (!raw?.trim()) return '';
+  const digits = raw.replace(/\D/g, '');
+  const n = digits.length > 10 ? digits.slice(-10) : digits;
+  if (n.length !== 10) return raw.trim();
+  return `(${n.slice(0, 3)})${n.slice(3, 6)}-${n.slice(6)}`;
+}
+
+function formatDate(dateStr: string): string {
+  if (!dateStr) return '';
+  try {
+    return new Date(dateStr).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  } catch {
+    return dateStr;
+  }
+}
+
+async function generateEstimatePDF(estimate: any, profile: any): Promise<Uint8Array> {
+  const jsPDF = (await import('https://esm.sh/jspdf@2.5.1')).default;
+  const doc = new jsPDF({ unit: 'mm', format: 'letter' });
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
-  const margin = 20;
-  let yPosition = 0;
-
-  // Colors matching email design
-  const darkBlue = [30, 58, 138]; // #1e3a8a
-  const lightGreen = [240, 253, 244]; // #f0fdf4
-  const darkGrey = [51, 51, 51]; // #333333
-
-  // Helper to format dates like email
-  const formatDate = (dateStr: string): string => {
-    if (!dateStr) return 'N/A';
-    try {
-      const date = new Date(dateStr);
-      return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-    } catch (error) {
-      return dateStr;
+  const margin = 12;
+  const contentWidth = pageWidth - margin * 2;
+  const navy = [18, 52, 99];
+  const money = (n: number) => `$${(Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const num = (source: any, ...keys: string[]) => {
+    if (!source) return 0;
+    for (const key of keys) {
+      const value = source[key];
+      if (value === null || value === undefined || value === '') continue;
+      const n = Number(value);
+      if (!Number.isNaN(n)) return n;
     }
+    return 0;
   };
 
-  // ===== HEADER (Dark Blue Banner) =====
-  doc.setFillColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-  doc.rect(0, yPosition, pageWidth, 25, 'F');
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(18);
-  doc.setFont('helvetica', 'bold');
-  const companyName = estimate.company_name || profile?.company_name || 'Company Name';
-  doc.text(companyName, pageWidth / 2, yPosition + 10, { align: 'center' });
-  doc.setFontSize(11);
-  doc.setFont('helvetica', 'normal');
-  doc.text(
-    estimate.pdf_subtitle || 'Professional Cleaning Estimate',
-    pageWidth / 2,
-    yPosition + 18,
-    { align: 'center' },
-  );
-  yPosition = 35;
-
-  // ===== CONTENT AREA =====
-  yPosition += 10;
-
-  // Client Information Section
-  doc.setFontSize(12);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-  doc.text('Client Information', margin, yPosition);
-  yPosition += 5;
-  // Underline
-  doc.setDrawColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-  doc.setLineWidth(0.5);
-  doc.line(margin, yPosition, pageWidth - margin, yPosition);
-  yPosition += 8;
-
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(darkGrey[0], darkGrey[1], darkGrey[2]);
-  doc.setFont('helvetica', 'bold');
-  doc.text('Name:', margin, yPosition);
-  doc.setFont('helvetica', 'normal');
-  doc.text(estimate.client_name, margin + 25, yPosition);
-  yPosition += 5;
-
-  doc.setFont('helvetica', 'bold');
-  doc.text('Email:', margin, yPosition);
-  doc.setFont('helvetica', 'normal');
-  doc.text(estimate.email, margin + 25, yPosition);
-  yPosition += 5;
-
-  doc.setFont('helvetica', 'bold');
-  doc.text('Phone:', margin, yPosition);
-  doc.setFont('helvetica', 'normal');
-  doc.text(estimate.phone, margin + 25, yPosition);
-  yPosition += 5;
-
-  doc.setFont('helvetica', 'bold');
-  doc.text('Address:', margin, yPosition);
-  doc.setFont('helvetica', 'normal');
-  const addressBits = [
-    [estimate.address, estimate.apt].filter(Boolean).join(', '),
-    [estimate.city, [estimate.state, estimate.zip].filter(Boolean).join(' ')].filter(Boolean).join(', '),
-  ].filter(Boolean);
-  const address = addressBits.join(', ') || 'N/A';
-  doc.text(address, margin + 25, yPosition);
-  yPosition += 12;
-
-  // Service Details Section
-  doc.setFontSize(12);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-  doc.text('Service Details', margin, yPosition);
-  yPosition += 5;
-  // Underline
-  doc.setDrawColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-  doc.setLineWidth(0.5);
-  doc.line(margin, yPosition, pageWidth - margin, yPosition);
-  yPosition += 8;
-
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(darkGrey[0], darkGrey[1], darkGrey[2]);
-  doc.setFont('helvetica', 'bold');
-  doc.text('Date:', margin, yPosition);
-  doc.setFont('helvetica', 'normal');
-  doc.text(formatDate(estimate.estimate_date), margin + 25, yPosition);
-  yPosition += 5;
-
-  doc.setFont('helvetica', 'bold');
-  doc.text('Service Type:', margin, yPosition);
-  doc.setFont('helvetica', 'normal');
-  const serviceType = `${estimate.service_type}${estimate.service_sub_type ? ` - ${estimate.service_sub_type}` : ''}`;
-  doc.text(serviceType, margin + 40, yPosition);
-  yPosition += 12;
-
-  // Service Specifications Section (for commercial estimates)
-  if (estimate.service_type === 'Commercial') {
-    const mainData = estimate.main_data || {};
-    const additionalData = estimate.additional_data || {};
-
-    // Helper to safely get value
-    const getValue = (value: any): string => {
-      if (value === null || value === undefined || value === '') return '';
-      return String(value);
-    };
-
-    // Format extra services array
-    const formatExtraServices = (extraServices: any): string => {
-      if (!extraServices) return '';
-      if (Array.isArray(extraServices)) {
-        return extraServices.filter(s => s).join(', ');
-      }
-      if (typeof extraServices === 'object') {
-        return Object.keys(extraServices).filter(key => extraServices[key]).join(', ');
-      }
-      return String(extraServices);
-    };
-
-    const propertyType = getValue(mainData.propertyType);
-    const serviceTypeValue = getValue(mainData.serviceType);
-    const extraServices = formatExtraServices(additionalData.extraServices);
-
-    // Handle cleaningDuration - can be number or string
-    let cleaningDuration = '';
-    if (mainData.cleaningDuration !== null && mainData.cleaningDuration !== undefined && mainData.cleaningDuration !== '') {
-      const duration = String(mainData.cleaningDuration);
-      cleaningDuration = duration.includes('hours') || duration.includes('hour') ? duration : `${duration} hours`;
-    }
-
-    const propertySize = getValue(mainData.propertySize);
-    const serviceSchedule = getValue(additionalData.serviceSchedule);
-    const startTime = getValue(mainData.startTime);
-
-    // Only show section if there's at least one commercial-specific field
-    if (propertyType || serviceTypeValue || extraServices || cleaningDuration || propertySize || serviceSchedule || startTime || estimate.service_scope) {
-      doc.setFontSize(12);
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-      doc.text('Service Specifications', margin, yPosition);
-      yPosition += 5;
-      // Underline
-      doc.setDrawColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-      doc.setLineWidth(0.5);
-      doc.line(margin, yPosition, pageWidth - margin, yPosition);
-      yPosition += 8;
-
-      // Calculate column widths for two-column layout
-      const colWidth = (pageWidth - (margin * 2)) / 2;
-      const col1X = margin;
-      const col2X = margin + colWidth;
-
-      // Build left column
-      const leftColumn: Array<{ label: string, value: string }> = [];
-      if (propertyType) leftColumn.push({ label: 'Property Type:', value: propertyType });
-      if (serviceTypeValue) leftColumn.push({ label: 'Service Type:', value: serviceTypeValue });
-      if (extraServices) leftColumn.push({ label: 'Extra Services:', value: extraServices });
-      if (cleaningDuration) leftColumn.push({ label: 'Cleaning Duration:', value: cleaningDuration });
-      if (estimate.service_scope) leftColumn.push({ label: 'Service Scope:', value: estimate.service_scope });
-
-      // Build right column
-      const rightColumn: Array<{ label: string, value: string }> = [];
-      if (propertySize) {
-        const sizeValue = propertySize.includes('sqft') || propertySize.includes('sq ft') ? propertySize : `${propertySize} sqft`;
-        rightColumn.push({ label: 'Property Size:', value: sizeValue });
-      }
-      if (serviceSchedule) rightColumn.push({ label: 'Service Schedule:', value: serviceSchedule });
-      if (startTime) rightColumn.push({ label: 'Time:', value: startTime });
-
-      // Calculate max rows
-      const maxRows = Math.max(leftColumn.length, rightColumn.length);
-
-      // Draw table rows
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(darkGrey[0], darkGrey[1], darkGrey[2]);
-
-      for (let i = 0; i < maxRows; i++) {
-        const leftItem = leftColumn[i];
-        const rightItem = rightColumn[i];
-
-        // Draw row border
-        doc.setDrawColor(229, 231, 235); // #e5e7eb
-        doc.setLineWidth(0.3);
-        doc.line(col1X, yPosition + 2, col1X + (colWidth * 2), yPosition + 2);
-
-        // Draw left column
-        if (leftItem) {
-          doc.setFont('helvetica', 'bold');
-          doc.text(leftItem.label, col1X + 3, yPosition);
-          doc.setFont('helvetica', 'normal');
-          const valueLines = doc.splitTextToSize(leftItem.value, colWidth - 50);
-          valueLines.forEach((line: string, idx: number) => {
-            doc.text(line, col1X + 50, yPosition + (idx * 4));
-          });
-        }
-
-        // Draw right column
-        if (rightItem) {
-          doc.setFont('helvetica', 'bold');
-          doc.text(rightItem.label, col2X + 3, yPosition);
-          doc.setFont('helvetica', 'normal');
-          const valueLines = doc.splitTextToSize(rightItem.value, colWidth - 50);
-          valueLines.forEach((line: string, idx: number) => {
-            doc.text(line, col2X + 50, yPosition + (idx * 4));
-          });
-        }
-
-        // Move to next row
-        const leftLines = leftItem ? doc.splitTextToSize(leftItem.value, colWidth - 50).length : 0;
-        const rightLines = rightItem ? doc.splitTextToSize(rightItem.value, colWidth - 50).length : 0;
-        const maxLines = Math.max(leftLines, rightLines, 1);
-        yPosition += Math.max(6, maxLines * 4);
-      }
-      yPosition += 8;
-    }
-  }
-
-  // Scope of Work Section (if present)
-  if (estimate.service_scope) {
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-    doc.text('Scope of Work', margin, yPosition);
-    yPosition += 5;
-    // Underline
-    doc.setDrawColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-    doc.setLineWidth(0.5);
-    doc.line(margin, yPosition, pageWidth - margin, yPosition);
-    yPosition += 8;
-
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(darkGrey[0], darkGrey[1], darkGrey[2]);
-    // Handle multi-line text for scope
-    const scopeLines = doc.splitTextToSize(estimate.service_scope, pageWidth - (margin * 2));
-    scopeLines.forEach((line: string) => {
-      doc.text(line, margin, yPosition);
-      yPosition += 4;
+  const main = estimate.main_data || {};
+  const additional = estimate.additional_data || {};
+  const extra = estimate.extra_services || {};
+  const rooms: Array<[string, number]> = [
+    ['Bedrooms', num(main, 'bedrooms')],
+    ['Bathrooms', num(main, 'bathrooms') || num(main, 'fullBaths', 'full_baths') + num(main, 'halfBaths', 'half_baths')],
+    ['Kitchen', num(main, 'kitchens', 'kitchen')],
+    ['Office', num(main, 'offices')],
+    ['Living Room', num(main, 'livingRooms', 'living_rooms')],
+    ['Dining Room', num(main, 'diningRooms', 'dining_rooms')],
+  ];
+  const extras: Array<[string, number]> = [
+    ['Fans', num(additional, 'fans')],
+    ['Oven', num(additional, 'oven')],
+    ['Refrigerator', num(additional, 'refrigerator')],
+    ['Blinds', num(additional, 'blinds')],
+    ['Windows Inside', num(additional, 'windowsInside', 'windows_inside')],
+    ['Windows Outside', num(additional, 'windowsOutside', 'windows_outside')],
+  ];
+  const flags: Array<[string, boolean]> = [
+    ['Baseboards', !!extra.baseboard],
+    ['Patio', !!extra.patio],
+    ['Walls', !!extra.walls],
+    ['Stairs', !!extra.stairs],
+    ['Cabinet Inside', !!(extra.cabinetInside || extra.cabinet_inside)],
+    ['Cabinet Outside', !!(extra.cabinetOutside || extra.cabinet_outside)],
+    ['Wash Dishes', !!(extra.washDishes || extra.wash_dishes)],
+    ['Hallways', !!extra.hallways],
+    ['Basement', !!extra.basement],
+  ];
+  const lines: Array<{ description: string; qty: number; price: number | null; amount: number | null }> = [];
+  for (const [description, qty] of rooms) if (qty > 0) lines.push({ description, qty, price: null, amount: null });
+  for (const [description, qty] of extras) if (qty > 0) lines.push({ description, qty, price: null, amount: null });
+  for (const [description, on] of flags) if (on) lines.push({ description, qty: 1, price: null, amount: null });
+  const subtotal = Number(estimate.subtotal) || 0;
+  const total = Number(estimate.total) || 0;
+  if (lines.length === 0) {
+    lines.push({
+      description: estimate.service_type === 'Commercial' ? 'Commercial Cleaning Services' : 'Residential Services',
+      qty: 1, price: subtotal, amount: subtotal,
     });
-    yPosition += 8;
+  } else {
+    lines[0].amount = subtotal;
   }
+  const discountValue = Number(estimate.discount_value) || 0;
+  const discountAmount = discountValue > 0
+    ? (estimate.discount_type === 'percentage' || estimate.discount_type === 'percent'
+      ? subtotal * discountValue / 100
+      : discountValue)
+    : 0;
+  const depositOn = !!(additional.deposit_required || additional.depositRequired);
+  const depositRaw = num(additional, 'deposit_value', 'depositValue');
+  const depositType = String(additional.deposit_type ?? additional.depositType ?? '');
+  const deposit = !depositOn || depositRaw <= 0 ? 0
+    : (depositType === 'percentage' || depositType === 'percent' ? total * depositRaw / 100 : depositRaw);
+  const sqft = num(main, 'squareFootage', 'square_footage', 'propertySize', 'homeSize');
+  const homeSize = sqft > 0 ? `${sqft} SQFT` : '';
+  const isQuote = estimate.pdf_subtitle === 'Professional Cleaning Quote';
+  const title = isQuote ? 'PROFESSIONAL CLEANING QUOTE' : 'PROFESSIONAL CLEANING ESTIMATE';
+  const numberLabel = isQuote ? 'QUOTE' : 'ESTIMATE';
+  const number = String(estimate.id || '').substring(0, 8).toUpperCase();
 
-  // Service Breakdown Section (for residential estimates)
-  const mainData = estimate.main_data || {};
-  const additionalData = estimate.additional_data || {};
-  const extraServices = estimate.extra_services || {};
+  const companyName = profile?.company_name || estimate.company_name || '';
+  const companyAddress = profile?.company_address || '';
+  const companyCity = [profile?.company_city, profile?.company_state, profile?.company_zip].filter(Boolean).join(' , ');
+  const companyPhone = profile?.company_phone || '';
+  const companyEmail = profile?.company_email || '';
 
-  // Helper to safely get numeric value from data (handles both camelCase and snake_case)
-  const getNumericValue = (data: any, camelKey: string, snakeKey?: string) => {
-    const value = data[camelKey] ?? data[snakeKey || camelKey.toLowerCase()];
-    if (value === null || value === undefined || value === '') return 0;
-    const numValue = Number(value);
-    return isNaN(numValue) ? 0 : numValue;
+  let y = margin;
+  doc.setFillColor(navy[0], navy[1], navy[2]);
+  doc.rect(margin, y, contentWidth, 10, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text(title, pageWidth / 2, y + 6.6, { align: 'center' });
+  y += 16;
+
+  const logoSize = 22;
+  const logoData = await loadLogoForPdf(profile?.company_logo);
+  if (logoData) {
+    try { doc.addImage(logoData.data, logoData.format, margin, y, logoSize, logoSize); } catch { /* ignore */ }
+  }
+  const textX = margin + (logoData ? logoSize + 4 : 0);
+  doc.setTextColor(0, 0, 0);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(16);
+  doc.text(companyName, textX, y + 6);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  const phoneStr = formatSheetPhone(companyPhone);
+  const leftColW = Math.max(doc.getTextWidth(companyAddress), doc.getTextWidth(phoneStr));
+  const pipeX = textX + leftColW + 3;
+  const rightTextX = pipeX + doc.getTextWidth('|') + 3;
+  let infoY = y + 12;
+  if (companyAddress || companyCity) {
+    if (companyAddress) doc.text(companyAddress, textX, infoY);
+    if (companyAddress && companyCity) doc.text('|', pipeX, infoY);
+    if (companyCity) doc.text(companyCity, companyAddress ? rightTextX : textX, infoY);
+    infoY += 5;
+  }
+  if (phoneStr || companyEmail) {
+    if (phoneStr) doc.text(phoneStr, textX, infoY);
+    if (phoneStr && companyEmail) doc.text('|', pipeX, infoY);
+    if (companyEmail) doc.text(companyEmail, phoneStr ? rightTextX : textX, infoY);
+    infoY += 5;
+  }
+  y = Math.max(y + logoSize, infoY) + 6;
+
+  const labeled = (label: string, value: string, x: number, yy: number) => {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(0, 0, 0);
+    doc.text(label, x, yy);
+    doc.setFont('helvetica', 'normal');
+    doc.text(value || '', x + doc.getTextWidth(label), yy);
   };
 
-  // Format main services
-  const mainServices: string[] = [];
-  const bedrooms = getNumericValue(mainData, 'bedrooms');
-  const kitchens = getNumericValue(mainData, 'kitchens');
-  const livingRooms = getNumericValue(mainData, 'livingRooms', 'living_rooms');
-  const diningRooms = getNumericValue(mainData, 'diningRooms', 'dining_rooms');
-  const offices = getNumericValue(mainData, 'offices');
-  const fullBaths = getNumericValue(mainData, 'fullBaths', 'full_baths');
-  const halfBaths = getNumericValue(mainData, 'halfBaths', 'half_baths');
-
-  if (bedrooms > 0) mainServices.push(`${bedrooms}x Bedrooms`);
-  if (kitchens > 0) mainServices.push(`${kitchens}x Kitchens`);
-  if (livingRooms > 0) mainServices.push(`${livingRooms}x Living Rooms`);
-  if (diningRooms > 0) mainServices.push(`${diningRooms}x Dining Rooms`);
-  if (offices > 0) mainServices.push(`${offices}x Offices`);
-  if (fullBaths > 0) mainServices.push(`${fullBaths}x Full Baths`);
-  if (halfBaths > 0) mainServices.push(`${halfBaths}x Half Baths`);
-  if (mainData.squareFootage || mainData.square_footage) mainServices.push(`1x Square Footage`);
-
-  // Format additional services
-  const additionalServices: string[] = [];
-  const fans = getNumericValue(additionalData, 'fans');
-  const oven = getNumericValue(additionalData, 'oven');
-  const refrigerator = getNumericValue(additionalData, 'refrigerator');
-  const blinds = getNumericValue(additionalData, 'blinds');
-  const windowsInside = getNumericValue(additionalData, 'windowsInside', 'windows_inside');
-  const windowsOutside = getNumericValue(additionalData, 'windowsOutside', 'windows_outside');
-
-  if (fans > 0) additionalServices.push(`${fans}x Fans`);
-  if (oven > 0) additionalServices.push(`${oven}x Oven`);
-  if (refrigerator > 0) additionalServices.push(`${refrigerator}x Refrigerator`);
-  if (blinds > 0) additionalServices.push(`${blinds}x Blinds`);
-  if (windowsInside > 0) additionalServices.push(`${windowsInside}x Windows Inside`);
-  if (windowsOutside > 0) additionalServices.push(`${windowsOutside}x Windows Outside`);
-
-  // Format extra services (boolean values)
-  const extraServicesList: string[] = [];
-  if (extraServices.baseboard) extraServicesList.push('1x Baseboards');
-  if (extraServices.patio) extraServicesList.push('1x Patio');
-  if (extraServices.walls) extraServicesList.push('1x Walls');
-  if (extraServices.stairs) extraServicesList.push('1x Stairs');
-  if (extraServices.cabinetInside || extraServices.cabinet_inside) extraServicesList.push('1x Cabinet Inside');
-  if (extraServices.cabinetOutside || extraServices.cabinet_outside) extraServicesList.push('1x Cabinet Outside');
-  if (extraServices.washDishes || extraServices.wash_dishes) extraServicesList.push('1x Wash Dishes');
-  if (extraServices.hallways) extraServicesList.push('1x Hallways');
-  if (extraServices.basement) extraServicesList.push('1x Basement');
-
-  // Only show Service Breakdown if there are any services
-  if (mainServices.length > 0 || additionalServices.length > 0 || extraServicesList.length > 0) {
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-    doc.text('Service Breakdown', margin, yPosition);
-    yPosition += 5;
-    // Underline
-    doc.setDrawColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-    doc.setLineWidth(0.5);
-    doc.line(margin, yPosition, pageWidth - margin, yPosition);
-    yPosition += 8;
-
-    // Calculate column widths
-    const colWidth = (pageWidth - (margin * 2)) / 3;
-    const col1X = margin;
-    const col2X = margin + colWidth;
-    const col3X = margin + (colWidth * 2);
-
-    // Table header with dark blue background
-    doc.setFillColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(8);
-    doc.setFont('helvetica', 'bold');
-
-    // Main Services header
-    // doc.rect(col1X, yPosition - 3, colWidth, 10, 'F');
-    // doc.text('Main Services', col1X + 3, yPosition + 3);
-
-    // Additional Services header
-    // doc.rect(col2X, yPosition - 3, colWidth, 10, 'F');
-    // doc.text('Additional', col2X + 3, yPosition + 2);
-    // doc.text('Services', col2X + 3, yPosition + 6);
-
-    // Extra Services header
-    // doc.rect(col3X, yPosition - 3, colWidth, 10, 'F');
-    // doc.text('Extra Services', col3X + 3, yPosition + 3);
-
-    yPosition += 10;
-
-    // Calculate max rows needed
-    const maxRows = Math.max(mainServices.length, additionalServices.length, extraServicesList.length);
-
-    // Table rows
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(darkGrey[0], darkGrey[1], darkGrey[2]);
-
-    for (let i = 0; i < maxRows; i++) {
-      const mainService = mainServices[i] || '';
-      const additionalService = additionalServices[i] || '';
-      const extraService = extraServicesList[i] || '';
-
-      // Draw row border
-      doc.setDrawColor(229, 231, 235); // #e5e7eb
-      doc.setLineWidth(0.3);
-      doc.line(col1X, yPosition + 2, col1X + (colWidth * 3), yPosition + 2);
-
-      // Calculate max lines needed for this row
-      const mainLines = mainService ? doc.splitTextToSize(mainService, colWidth - 6).length : 0;
-      const additionalLines = additionalService ? doc.splitTextToSize(additionalService, colWidth - 6).length : 0;
-      const extraLines = extraService ? doc.splitTextToSize(extraService, colWidth - 6).length : 0;
-      const maxLines = Math.max(mainLines, additionalLines, extraLines, 1);
-
-      // Draw text
-      if (mainService) {
-        const lines = doc.splitTextToSize(mainService, colWidth - 6);
-        lines.forEach((line: string, idx: number) => {
-          doc.text(line, col1X + 3, yPosition + (idx * 4));
-        });
-      }
-      if (additionalService) {
-        const lines = doc.splitTextToSize(additionalService, colWidth - 6);
-        lines.forEach((line: string, idx: number) => {
-          doc.text(line, col2X + 3, yPosition + (idx * 4));
-        });
-      }
-      if (extraService) {
-        const lines = doc.splitTextToSize(extraService, colWidth - 6);
-        lines.forEach((line: string, idx: number) => {
-          doc.text(line, col3X + 3, yPosition + (idx * 4));
-        });
-      }
-
-      // Move to next row (use max height of all three columns)
-      yPosition += Math.max(6, maxLines * 4);
-    }
-    yPosition += 8;
-  }
-
-  // Pricing Section
-  doc.setFontSize(12);
+  const rightX = margin + contentWidth * 0.58;
+  let leftY = y;
+  let rightY = y;
   doc.setFont('helvetica', 'bold');
-  doc.setTextColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-  doc.text('Pricing', margin, yPosition);
-  yPosition += 5;
-  // Underline
-  doc.setDrawColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-  doc.setLineWidth(0.5);
-  doc.line(margin, yPosition, pageWidth - margin, yPosition);
-  yPosition += 10;
+  doc.setFontSize(11);
+  doc.text('CUSTOMER INFORMATION', margin, leftY);
+  leftY += 7;
+  labeled('Name : ', estimate.client_name || '', margin, leftY); leftY += 5;
+  labeled('Phone : ', formatSheetPhone(estimate.phone || ''), margin, leftY); leftY += 5;
+  labeled('Email : ', estimate.email || '', margin, leftY); leftY += 5;
+  labeled('Address : ', [estimate.address, estimate.apt].filter(Boolean).join(' '), margin, leftY); leftY += 5;
+  const clientCity = [estimate.city, [estimate.state, estimate.zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  if (clientCity) { doc.setFont('helvetica', 'normal'); doc.text(clientCity, margin, leftY); leftY += 5; }
 
-  // Light green box for pricing
-  const pricingBoxHeight = estimate.discount_value && estimate.discount_value > 0 ? 40 : 32;
-  doc.setFillColor(lightGreen[0], lightGreen[1], lightGreen[2]);
-  doc.rect(margin, yPosition - 5, pageWidth - (margin * 2), pricingBoxHeight, 'F');
-
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text(`${numberLabel} : ${number}`, rightX, rightY);
+  rightY += 7;
   doc.setFontSize(10);
+  doc.text('SERVICE DETAILS', rightX, rightY);
+  rightY += 6;
+  labeled('Date : ', formatDate(estimate.estimate_date), rightX, rightY); rightY += 5;
+  labeled('Type of service : ', estimate.service_type || '', rightX, rightY); rightY += 5;
+  if (estimate.service_sub_type) { labeled('Category : ', estimate.service_sub_type, rightX, rightY); rightY += 5; }
+  if (homeSize) { labeled('Home Size : ', homeSize, rightX, rightY); rightY += 5; }
+  y = Math.max(leftY, rightY) + 4;
+
+  const cols = [14, 78, 28, 22, contentWidth - 14 - 78 - 28 - 22];
+  const headers = ['ITEM', 'DESCRIPTION', 'PRICE', 'QTY', 'SUBTOTAL'];
+  const rowH = 7;
+  const drawHeader = () => {
+    if (y > pageHeight - 40) { doc.addPage(); y = margin; }
+    doc.setFillColor(navy[0], navy[1], navy[2]);
+    doc.rect(margin, y, contentWidth, rowH, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    let x = margin;
+    headers.forEach((label, i) => {
+      const tx = i === 0 ? x + 2 : x + cols[i] / 2;
+      doc.text(label, tx, y + 4.6, { align: i === 0 ? 'left' : 'center' });
+      x += cols[i];
+    });
+    y += rowH;
+  };
+  drawHeader();
+  doc.setTextColor(0, 0, 0);
   doc.setFont('helvetica', 'normal');
-  doc.setTextColor(darkGrey[0], darkGrey[1], darkGrey[2]);
-  doc.text('Subtotal:', margin + 8, yPosition);
-  doc.text(`$${formatCurrency(estimate.subtotal || 0)}`, pageWidth - margin - 8, yPosition, { align: 'right' });
-  yPosition += 6;
+  doc.setFontSize(8);
+  lines.forEach((line, index) => {
+    if (y > pageHeight - 28) {
+      doc.addPage(); y = margin; drawHeader();
+      doc.setTextColor(0, 0, 0); doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
+    }
+    doc.setDrawColor(180, 180, 180);
+    doc.setLineWidth(0.1);
+    const cells = [
+      String(index + 1),
+      line.description,
+      line.price == null ? '---' : money(line.price),
+      String(line.qty),
+      line.amount == null ? '' : money(line.amount),
+    ];
+    let x = margin;
+    cells.forEach((cell, i) => {
+      doc.rect(x, y, cols[i], rowH);
+      const tx = i >= 2 ? x + cols[i] / 2 : x + 2;
+      doc.text(cell, tx, y + 4.6, { align: i >= 2 ? 'center' : 'left' });
+      x += cols[i];
+    });
+    y += rowH;
+  });
 
-  if (estimate.discount_value && estimate.discount_value > 0) {
-    const discount = estimate.discount_type === 'percentage'
-      ? (estimate.subtotal * estimate.discount_value / 100)
-      : estimate.discount_value;
-    doc.text('Discount:', margin + 8, yPosition);
-    doc.text(`-$${formatCurrency(discount)}`, pageWidth - margin - 8, yPosition, { align: 'right' });
-    yPosition += 6;
-  }
-
-  // Total with border top
-  doc.setDrawColor(209, 213, 219); // #d1d5db
-  doc.setLineWidth(0.5);
-  doc.line(margin + 8, yPosition, pageWidth - margin - 8, yPosition);
-  yPosition += 8;
-
-  doc.setFontSize(16);
+  y += 16;
   doc.setFont('helvetica', 'bold');
-  doc.setTextColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-  doc.text('Total:', margin + 8, yPosition);
-  doc.text(`$${formatCurrency(estimate.total || 0)}`, pageWidth - margin - 8, yPosition, { align: 'right' });
-  yPosition += 15;
-
-  // ===== FOOTER (Dark Blue Banner) =====
-  const footerY = pageHeight - 20;
-  doc.setFillColor(darkBlue[0], darkBlue[1], darkBlue[2]);
-  doc.rect(0, footerY, pageWidth, 20, 'F');
-  doc.setTextColor(255, 255, 255);
   doc.setFontSize(9);
+  const amountRight = pageWidth - margin - 1.5;
+  const amountColW = 22;
+  const labelGap = 3;
+  const labelW = Math.max(...['Subtotal :', 'Discount :', 'Deposit :', 'Pending :', 'Total :'].map((label) => doc.getTextWidth(label)));
+  const labelX = amountRight - amountColW - labelGap - labelW;
+  const drawTotalRow = (label: string, value: string) => {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(0, 0, 0);
+    doc.text(label, labelX, y);
+    doc.setFont('helvetica', 'normal');
+    doc.text(value, amountRight, y, { align: 'right' });
+    y += 6;
+  };
+  drawTotalRow('Subtotal :', money(subtotal));
+  drawTotalRow('Discount :', money(discountAmount));
+  y += 1;
+  const totalH = 8;
+  const barLeft = labelX - 1.5;
+  const valueBoxLeft = amountRight - amountColW;
+  doc.setFillColor(navy[0], navy[1], navy[2]);
+  doc.rect(barLeft, y - 5, valueBoxLeft - barLeft, totalH, 'F');
+  doc.setDrawColor(180, 180, 180);
+  doc.setLineWidth(0.1);
+  doc.rect(valueBoxLeft, y - 5, pageWidth - margin - valueBoxLeft, totalH);
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Total :', labelX, y);
+  doc.setTextColor(0, 0, 0);
   doc.setFont('helvetica', 'normal');
-  doc.text('Service provided by', pageWidth / 2, footerY + 6, { align: 'center' });
-  doc.text('© 2024 Thunder Pro Inc. | www.thunderpro.co', pageWidth / 2, footerY + 14, { align: 'center' });
+  doc.text(money(total), amountRight, y, { align: 'right' });
+  y += 10;
+  drawTotalRow('Deposit :', money(deposit));
+  drawTotalRow('Pending :', money(Math.max(0, total - deposit)));
 
-  // Convert to Uint8Array for response
-  const pdfOutput = doc.output('arraybuffer');
-  return new Uint8Array(pdfOutput);
+  return new Uint8Array(doc.output('arraybuffer'));
 }
+
 
 serve(async (req: Request): Promise<Response> => {
   return await Sentry.withScope(async (scope) => {
@@ -929,10 +743,7 @@ serve(async (req: Request): Promise<Response> => {
       const isCommercial = !isQuickQuote && estimate.service_type === 'Commercial';
       console.log(`Generating PDF for ${isQuickQuote ? 'Quick Quote' : isCommercial ? 'Commercial' : 'Residential'} estimate`);
 
-      // Generate PDF using the appropriate generator
-      const pdfBytes = isCommercial
-        ? await generateCommercialProposalPDF(estimate, profile || {})
-        : await generateEstimatePDF(estimate, profile || {});
+      const pdfBytes = await generateEstimatePDF(estimate, profile || {});
 
       // Determine filename based on estimate type
       const filenamePrefix = isQuickQuote ? 'Quote' : isCommercial ? 'Commercial_Proposal' : 'Estimate';

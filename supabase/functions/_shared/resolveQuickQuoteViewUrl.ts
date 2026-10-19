@@ -42,7 +42,7 @@ export function resolveQuickQuoteHost(
 }
 
 /**
- * Client-facing View Quote URL used only by the email button and the SMS link.
+ * Client-facing View Quote URL used by the email button and the SMS link.
  * Staging and production both serve `/public/quick-quote/:token`.
  */
 export function resolveQuickQuoteViewUrl(quote: {
@@ -52,4 +52,17 @@ export function resolveQuickQuoteViewUrl(quote: {
   const slug = quote.public_share_token || quote.id;
   if (!slug) return null;
   return `${resolveQuickQuoteHost()}/public/quick-quote/${slug}`;
+}
+
+/**
+ * Same host as the quote link. Estimates use `/public/estimate/:token`,
+ * which is the page the SMS "View it here" link opens.
+ */
+export function resolveEstimateViewUrl(estimate: {
+  id?: string | null;
+  public_share_token?: string | null;
+}): string | null {
+  const slug = estimate.public_share_token || estimate.id;
+  if (!slug) return null;
+  return `${resolveQuickQuoteHost()}/public/estimate/${slug}`;
 }

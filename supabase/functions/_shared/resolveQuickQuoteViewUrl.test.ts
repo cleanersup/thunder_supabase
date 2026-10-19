@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveQuickQuoteHost, resolveQuickQuoteViewUrl } from "./resolveQuickQuoteViewUrl.ts";
+import { resolveEstimateViewUrl, resolveQuickQuoteHost, resolveQuickQuoteViewUrl } from "./resolveQuickQuoteViewUrl.ts";
 
 test("View Quote host is staging.thunderpro.co when ENVIRONMENT is staging", () => {
   assert.equal(resolveQuickQuoteHost("staging", "http://kong:8000"), "https://staging.thunderpro.co");
@@ -26,6 +26,15 @@ test("View Quote host is dashboard.thunderpro.co for the production portal API",
 
 test("View Quote host defaults to production when Docker only has kong", () => {
   assert.equal(resolveQuickQuoteHost("", "http://kong:8000"), "https://dashboard.thunderpro.co");
+});
+
+test("View Estimate URL uses /public/estimate/ on the same host as SMS", () => {
+  const url = resolveEstimateViewUrl({
+    id: "11111111-1111-1111-1111-111111111111",
+    public_share_token: "estimateToken",
+  });
+  assert.equal(url?.endsWith("/public/estimate/estimateToken"), true);
+  assert.match(url ?? "", /^https:\/\/(staging|dashboard)\.thunderpro\.co\/public\/estimate\/estimateToken$/);
 });
 
 test("View Quote URL uses /public/quick-quote/ on the hardcoded host", () => {
