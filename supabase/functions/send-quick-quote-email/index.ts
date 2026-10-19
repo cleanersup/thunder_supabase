@@ -10,7 +10,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
-import { resolveQuickQuoteViewUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
+import { resolveDocumentPdfUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -555,8 +555,8 @@ const handler = async (req: Request): Promise<Response> => {
       const trackingPixelUrl =
         `${publicSupabaseUrl}/functions/v1/mark-viewed?type=quick_quote&id=${quote.id}`;
 
-      // Same page the SMS link opens. Not the PDF download.
-      const viewUrl = resolveQuickQuoteViewUrl(quote);
+      // Same PDF the SMS link opens. The function returns it inline.
+      const viewUrl = resolveDocumentPdfUrl(quote.public_share_token || quote.id);
       const acceptUrl = `${publicSupabaseUrl}/functions/v1/accept-quick-quote?id=${quote.id}`;
       console.log("quickquote url", viewUrl);
 

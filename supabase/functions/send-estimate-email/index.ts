@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
-import { resolveEstimateViewUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
+import { resolveDocumentPdfUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -329,7 +329,7 @@ ${formatServiceBreakdown()}
 
 <div style="text-align:center;margin:30px 0">
 <a href="${publicSupabaseUrl}/functions/v1/accept-estimate?id=${estimate.id}" style="display:inline-block;background:#10b981;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">Accept Estimate</a>
-<a href="${resolveEstimateViewUrl(estimate) ?? "#"}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">View Estimate</a>
+<a href="${resolveDocumentPdfUrl(estimate.public_share_token || estimate.id) ?? "#"}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">View Estimate</a>
 </div>
 
 </div>
@@ -588,7 +588,7 @@ ${formatServiceBreakdown()}
 </table>
 
 <div style="text-align:center;margin:30px 0">
-<a href="${resolveEstimateViewUrl(estimate) ?? "#"}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">View Estimate</a>
+<a href="${resolveDocumentPdfUrl(estimate.public_share_token || estimate.id) ?? "#"}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">View Estimate</a>
 </div>
 
 </div>
@@ -1043,7 +1043,7 @@ const handler = async (req: Request): Promise<Response> => {
       // Public URL for Edge Functions (accept, download PDF, tracking pixel).
       const publicSupabaseUrl = resolvePublicSupabaseUrl();
       console.log('Public Supabase URL for estimate email links:', publicSupabaseUrl);
-      console.log('estimate url', resolveEstimateViewUrl(estimateData));
+      console.log('estimate url', resolveDocumentPdfUrl(estimateData.public_share_token || estimateData.id));
 
       // Generate tracking pixel URL (use public URL so email clients can reach it)
       const trackingPixelUrl = `${publicSupabaseUrl}/functions/v1/mark-viewed?type=estimate&id=${estimateData.id}`;

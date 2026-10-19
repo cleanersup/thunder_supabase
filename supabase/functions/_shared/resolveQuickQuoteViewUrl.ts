@@ -66,3 +66,36 @@ export function resolveEstimateViewUrl(estimate: {
   if (!slug) return null;
   return `${resolveQuickQuoteHost()}/public/estimate/${slug}`;
 }
+
+const STAGING_FUNCTIONS_HOST = "https://app.staging.thunderpro.co";
+const PRODUCTION_FUNCTIONS_HOST = "https://portal.thunderpro.co";
+
+function isInternalFunctionsHost(url: string): boolean {
+  return url.includes("kong:8000") || url.includes("127.0.0.1") || url.includes("localhost");
+}
+
+/** Host that serves /functions/v1 for links opened outside the app. */
+export function resolvePublicFunctionsHost(
+  environment = env("ENVIRONMENT"),
+  configured = env("PUBLIC_SUPABASE_URL_API"),
+  supabaseUrl = env("SUPABASE_URL"),
+): string {
+  const blob = `${environment} ${configured} ${supabaseUrl}`.toLowerCase();
+  const pick = (url: string) => (
+    url.includes("staging.thunderpro.co") ? STAGING_FUNCTIONS_HOST : url.replace(/\/$/, "")
+  );
+  if (configured && !isInternalFunctionsHost(configured)) return pick(configured);
+  if (supabaseUrl && !isInternalFunctionsHost(supabaseUrl)) return pick(supabaseUrl);
+  if (blob.includes("staging")) return STAGING_FUNCTIONS_HOST;
+  return PRODUCTION_FUNCTIONS_HOST;
+}
+
+/**
+ * PDF the customer opens from SMS and email. The function returns the file
+ * inline, so the phone shows the PDF instead of the web sheet.
+ */
+export function resolveDocumentPdfUrl(token: string | null | undefined): string | null {
+  const slug = token?.trim();
+  if (!slug) return null;
+  return `${resolvePublicFunctionsHost()}/functions/v1/download-estimate-pdf?token=${encodeURIComponent(slug)}`;
+}

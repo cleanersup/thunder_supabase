@@ -8,7 +8,7 @@
 
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import * as Sentry from "npm:@sentry/deno";
-import { resolveQuickQuoteViewUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
+import { resolveDocumentPdfUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -102,7 +102,7 @@ serve(async (req) => {
         quote = data ?? null;
       }
 
-      const resolvedUrl = resolveQuickQuoteViewUrl(quote ?? {});
+      const resolvedUrl = resolveDocumentPdfUrl(quote?.public_share_token || quote?.id);
       console.log("quickquote url", resolvedUrl, {
         quickQuoteId,
         quoteId: quote?.id ?? null,

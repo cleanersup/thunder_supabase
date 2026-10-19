@@ -511,7 +511,27 @@ async function generateEstimatePDF(estimate: any, profile: any): Promise<Uint8Ar
     doc.text(value || '', x + doc.getTextWidth(label), yy);
   };
 
-  const rightX = margin + contentWidth * 0.58;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  const numberLine = `${numberLabel} : ${number}`;
+  let blockW = doc.getTextWidth(numberLine);
+  doc.setFontSize(10);
+  blockW = Math.max(blockW, doc.getTextWidth('SERVICE DETAILS'));
+  const pairW = (label: string, value: string) => {
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    const labelWidth = doc.getTextWidth(label);
+    doc.setFont('helvetica', 'normal');
+    return labelWidth + doc.getTextWidth(value || '');
+  };
+  blockW = Math.max(
+    blockW,
+    pairW('Date : ', formatDate(estimate.estimate_date)),
+    pairW('Type of service : ', estimate.service_type || ''),
+    estimate.service_sub_type ? pairW('Category : ', estimate.service_sub_type) : 0,
+    homeSize ? pairW('Home Size : ', homeSize) : 0,
+  );
+  const rightX = Math.max(margin + 78, pageWidth - margin - blockW);
   let leftY = y;
   let rightY = y;
   doc.setFont('helvetica', 'bold');
@@ -621,6 +641,23 @@ async function generateEstimatePDF(estimate: any, profile: any): Promise<Uint8Ar
   y += 10;
   drawTotalRow('Deposit :', money(deposit));
   drawTotalRow('Pending :', money(Math.max(0, total - deposit)));
+
+  let footerY = pageHeight - 12;
+  if (y > footerY - 8) footerY = y + 10;
+  if (footerY > pageHeight - 8) {
+    doc.addPage();
+    footerY = pageHeight - 12;
+  }
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(navy[0], navy[1], navy[2]);
+  const brand = 'Service Provide By Thunder Pro Inc';
+  const site = 'www.thunderpro.co';
+  const gap = 10;
+  const brandW = doc.getTextWidth(brand);
+  const footerX = (pageWidth - brandW - gap - doc.getTextWidth(site)) / 2;
+  doc.text(brand, footerX, footerY);
+  doc.textWithLink(site, footerX + brandW + gap, footerY, { url: 'https://www.thunderpro.co' });
 
   return new Uint8Array(doc.output('arraybuffer'));
 }
@@ -754,7 +791,7 @@ serve(async (req: Request): Promise<Response> => {
         status: 200,
         headers: {
           'Content-Type': 'application/pdf',
-          'Content-Disposition': `attachment; filename="${filename}"`,
+          'Content-Disposition': `inline; filename="${filename}"`,
           ...corsHeaders,
         },
       });
