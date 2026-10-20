@@ -47,6 +47,32 @@ test("client send estimate uses the card and hides the reference title", () => {
   assert.match(html, /mark-viewed/);
 });
 
+test("client send quote uses estimate button names", () => {
+  const html = renderDocumentEmail({
+    kind: "quote",
+    audience: "client",
+    moment: "sent",
+    companyName: "Clean Up Company",
+    greetingName: "Pedro",
+    clientFirstName: "Pedro",
+    documentNumber: "Q1",
+    dateLabel: "October 20, 2026",
+    serviceType: "Single Payment",
+    contact,
+    pdfUrl: "https://portal.thunderpro.co/functions/v1/download-estimate-pdf?token=q",
+    acceptUrl: "https://portal.thunderpro.co/functions/v1/accept-quick-quote?id=1",
+  });
+
+  assert.match(html, /sent you an estimate/);
+  assert.match(html, /Estimate Number :<\/span> Q1/);
+  assert.match(html, />Accept Estimate</);
+  assert.match(html, />View Estimate</);
+  assert.match(html, /click the Accept Estimate button/);
+  assert.doesNotMatch(html, /Accept Quote/);
+  assert.doesNotMatch(html, /View Quote/);
+  assert.doesNotMatch(html, /Quote Number/);
+});
+
 test("owner accepted quote names the client and offers the PDF", () => {
   const html = renderDocumentEmail({
     kind: "quote",
@@ -63,10 +89,14 @@ test("owner accepted quote names the client and offers the PDF", () => {
     acceptUrl: null,
   });
 
-  assert.match(html, />QUOTE</);
+  assert.match(html, />ESTIMATE</);
+  assert.doesNotMatch(html, />QUOTE</);
   assert.doesNotMatch(html, /ACCEPTED CONFIRMATION/);
   assert.match(html, /Hello Javier,/);
-  assert.match(html, /Great news ! Pedro has accepted your quote/);
+  assert.match(html, /Great news ! Pedro has accepted your estimate/);
+  assert.match(html, /Estimate Number :<\/span> Q1/);
+  assert.doesNotMatch(html, /Quote Number/);
+  assert.doesNotMatch(html, /\bquote\b/i);
   assert.match(html, /Javier Silva/);
   assert.match(html, />Download PDF</);
   assert.doesNotMatch(html, /Accept Quote/);

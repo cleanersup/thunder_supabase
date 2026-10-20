@@ -83,30 +83,30 @@ export function todayLongDate(now = new Date()): string {
   }).format(now);
 }
 
-function bannerLabel(kind: DocumentKind): string {
-  return kind === "quote" ? "QUOTE" : "ESTIMATE";
+function bannerLabel(): string {
+  return "ESTIMATE";
 }
 
-function numberLabel(kind: DocumentKind): string {
-  return kind === "quote" ? "Quote Number" : "Estimate Number";
+function numberLabel(): string {
+  return "Estimate Number";
 }
 
-function acceptLabel(kind: DocumentKind): string {
-  return kind === "quote" ? "Accept Quote" : "Accept Estimate";
+function acceptLabel(): string {
+  return "Accept Estimate";
 }
 
-function viewLabel(kind: DocumentKind): string {
-  return kind === "quote" ? "View Quote" : "View Estimate";
+function viewLabel(): string {
+  return "View Estimate";
 }
 
-function noun(kind: DocumentKind): string {
-  return kind === "quote" ? "quote" : "estimate";
+function noun(): string {
+  return "estimate";
 }
 
 function bodyCopy(input: DocumentEmailInput): string {
   const company = input.companyName.trim() || "your cleaning company";
   const client = input.clientFirstName.trim() || "your client";
-  const word = noun(input.kind);
+  const word = noun();
   const updated = input.isUpdate ? "updated " : "";
 
   if (input.moment === "accepted" && input.audience === "client") {
@@ -118,7 +118,7 @@ function bodyCopy(input: DocumentEmailInput): string {
   if (input.audience === "owner") {
     return `Your ${updated}${word} has been successfully sent to ${client}. You can view the ${word} details in your Thunder Pro account.`;
   }
-  return `${company} has sent you an ${updated}${word} for your requested services. Please download the attached PDF to review the details, or click the ${acceptLabel(input.kind)} button below to review and accept the ${word} online.`;
+  return `${company} has sent you an ${updated}${word} for your requested services. Please download the attached PDF to review the details, or click the ${acceptLabel()} button below to review and accept the ${word} online.`;
 }
 
 function detailLine(label: string, value: string): string {
@@ -128,13 +128,13 @@ function detailLine(label: string, value: string): string {
 }
 
 function button(href: string, label: string, background: string): string {
-  return `<a href="${escapeHtml(href)}" style="display:inline-block;background-color:${background};color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:700;line-height:1;text-decoration:none;padding:14px 22px;border-radius:8px;margin:6px;">${escapeHtml(label)}</a>`;
+  return `<a href="${escapeHtml(href)}" style="display:inline-block;background-color:${background};color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:700;line-height:1;text-decoration:none;padding:14px 22px;border-radius:4px;margin:6px;">${escapeHtml(label)}</a>`;
 }
 
 export function renderDocumentEmail(input: DocumentEmailInput): string {
   const hello = input.greetingName.trim() || "there";
   const lines = [
-    detailLine(numberLabel(input.kind), input.documentNumber),
+    detailLine(numberLabel(), input.documentNumber),
     detailLine("Date", input.dateLabel),
     detailLine("Service Type", input.serviceType),
     `<p style="margin:0 0 14px 0;font-size:8px;line-height:8px;">&nbsp;</p>`,
@@ -146,11 +146,11 @@ export function renderDocumentEmail(input: DocumentEmailInput): string {
 
   const actions: string[] = [];
   if (input.moment === "sent" && input.audience === "client" && input.acceptUrl) {
-    actions.push(button(input.acceptUrl, acceptLabel(input.kind), GREEN));
+    actions.push(button(input.acceptUrl, acceptLabel(), GREEN));
   }
   if (input.pdfUrl) {
     const label = input.moment === "sent" && input.audience === "client"
-      ? viewLabel(input.kind)
+      ? viewLabel()
       : "Download PDF";
     actions.push(button(input.pdfUrl, label, NAVY));
   }
@@ -165,16 +165,16 @@ export function renderDocumentEmail(input: DocumentEmailInput): string {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${escapeHtml(bannerLabel(input.kind))}</title>
+<title>${escapeHtml(bannerLabel())}</title>
 </head>
 <body style="margin:0;padding:0;background-color:${PAGE};">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:${PAGE};">
 <tr>
 <td align="center" style="padding:28px 12px;">
-<table role="presentation" width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background-color:#ffffff;border-radius:16px;overflow:hidden;">
+<table role="presentation" width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background-color:#ffffff;border-radius:6px;overflow:hidden;">
 <tr>
 <td align="center" style="background-color:${NAVY};padding:22px 20px;">
-<p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;letter-spacing:1.5px;color:#ffffff;">${bannerLabel(input.kind)}</p>
+<p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;letter-spacing:1.5px;color:#ffffff;">${bannerLabel()}</p>
 </td>
 </tr>
 <tr>
