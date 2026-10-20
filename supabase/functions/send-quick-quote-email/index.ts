@@ -1,9 +1,7 @@
 // send-quick-quote-email
 //
 // Emails a quick quote to an address typed by the owner (a quick quote has no
-// client record). Same template as the residential estimate email: the "Client
-// Information" block is replaced by "Prepared For" with whatever contact the
-// owner typed, and there is no address line.
+// client record). The card matches the estimate email. A quote has no address line.
 //
 // Body: { quickQuoteId, recipientEmail, recipientName?, publicUrl?, isUpdate?, quoteData? }
 
@@ -11,6 +9,14 @@ import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
 import { resolveDocumentPdfUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
+import {
+  documentCode,
+  formatPhoneDisplay,
+  formatStreetAddress,
+  personFirstName,
+  renderDocumentEmail,
+} from "../_shared/documentEmailCard.ts";
+import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -31,345 +37,6 @@ interface QuickQuoteEmailRequest {
   /** Ignored. The view button uses the same URL as the SMS link. */
   publicUrl?: string;
   isUpdate?: boolean;
-}
-
-// ─── Pricing helpers (same rules as send-estimate-email) ─────────────────────
-
-function isPercentageDiscount(type: string | null | undefined): boolean {
-  return type === 'percentage' || type === 'percent';
-}
-
-function computeDiscountAmount(
-  subtotal: number,
-  discountType: string | null | undefined,
-  discountValue: number | string | null | undefined,
-): number {
-  const val = Number(discountValue);
-  if (!Number.isFinite(val) || val <= 0) return 0;
-  if (isPercentageDiscount(discountType)) {
-    return subtotal * val / 100;
-  }
-  return val;
-}
-
-function resolveQuoteDisplayTotal(quote: {
-  subtotal?: number | null;
-  total?: number | null;
-  discount_type?: string | null;
-  discount_value?: number | null;
-}): number {
-  const subtotal = Number(quote.subtotal) || 0;
-  const storedTotal = Number(quote.total) || 0;
-
-  if (!quote.discount_value || Number(quote.discount_value) <= 0) {
-    return storedTotal || subtotal;
-  }
-
-  const discountAmount = computeDiscountAmount(subtotal, quote.discount_type, quote.discount_value);
-  const computedTotal = Math.max(0, subtotal - discountAmount);
-
-  if (Math.abs(storedTotal - subtotal) < 0.01 && computedTotal < subtotal) {
-    return computedTotal;
-  }
-
-  return storedTotal || computedTotal;
-}
-
-// ─── Shared template pieces ───────────────────────────────────────────────────
-
-function getTodayDate(): string {
-  const now = new Date();
-  const months = ['January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December'];
-  return `${months[now.getMonth()]} ${now.getDate()}, ${now.getFullYear()}`;
-}
-
-/** Same three-column Main / Additional / Extra table used by residential estimates. */
-function formatServiceBreakdown(quote: any): string {
-  const mainData = quote.main_data || {};
-  const additionalData = quote.additional_data || {};
-  const extraServices = quote.extra_services || {};
-
-  const getNumericValue = (data: any, camelKey: string, snakeKey?: string) => {
-    const value = data[camelKey] ?? data[snakeKey || camelKey.toLowerCase()];
-    if (value === null || value === undefined || value === '') return 0;
-    const numValue = Number(value);
-    return isNaN(numValue) ? 0 : numValue;
-  };
-
-  const mainServices: string[] = [];
-  const bedrooms = getNumericValue(mainData, 'bedrooms');
-  const kitchens = getNumericValue(mainData, 'kitchens');
-  const livingRooms = getNumericValue(mainData, 'livingRooms', 'living_rooms');
-  const diningRooms = getNumericValue(mainData, 'diningRooms', 'dining_rooms');
-  const offices = getNumericValue(mainData, 'offices');
-  const fullBaths = getNumericValue(mainData, 'fullBaths', 'full_baths');
-  const halfBaths = getNumericValue(mainData, 'halfBaths', 'half_baths');
-
-  if (bedrooms > 0) mainServices.push(`${bedrooms}x Bedrooms`);
-  if (kitchens > 0) mainServices.push(`${kitchens}x Kitchens`);
-  if (livingRooms > 0) mainServices.push(`${livingRooms}x Living Rooms`);
-  if (diningRooms > 0) mainServices.push(`${diningRooms}x Dining Rooms`);
-  if (offices > 0) mainServices.push(`${offices}x Offices`);
-  if (fullBaths > 0) mainServices.push(`${fullBaths}x Full Baths`);
-  if (halfBaths > 0) mainServices.push(`${halfBaths}x Half Baths`);
-  if (mainData.squareFootage || mainData.square_footage) mainServices.push(`1x Square Footage`);
-
-  const additionalServices: string[] = [];
-  const fans = getNumericValue(additionalData, 'fans');
-  const oven = getNumericValue(additionalData, 'oven');
-  const refrigerator = getNumericValue(additionalData, 'refrigerator');
-  const blinds = getNumericValue(additionalData, 'blinds');
-  const windowsInside = getNumericValue(additionalData, 'windowsInside', 'windows_inside');
-  const windowsOutside = getNumericValue(additionalData, 'windowsOutside', 'windows_outside');
-
-  if (fans > 0) additionalServices.push(`${fans}x Fans`);
-  if (oven > 0) additionalServices.push(`${oven}x Oven`);
-  if (refrigerator > 0) additionalServices.push(`${refrigerator}x Refrigerator`);
-  if (blinds > 0) additionalServices.push(`${blinds}x Blinds`);
-  if (windowsInside > 0) additionalServices.push(`${windowsInside}x Windows Inside`);
-  if (windowsOutside > 0) additionalServices.push(`${windowsOutside}x Windows Outside`);
-
-  const extraServicesList: string[] = [];
-  if (extraServices.baseboard) extraServicesList.push('1x Baseboards');
-  if (extraServices.patio) extraServicesList.push('1x Patio');
-  if (extraServices.walls) extraServicesList.push('1x Walls');
-  if (extraServices.stairs) extraServicesList.push('1x Stairs');
-  if (extraServices.cabinetInside || extraServices.cabinet_inside) extraServicesList.push('1x Cabinet Inside');
-  if (extraServices.cabinetOutside || extraServices.cabinet_outside) extraServicesList.push('1x Cabinet Outside');
-  if (extraServices.washDishes || extraServices.wash_dishes) extraServicesList.push('1x Wash Dishes');
-  if (extraServices.hallways) extraServicesList.push('1x Hallways');
-  if (extraServices.basement) extraServicesList.push('1x Basement');
-
-  if (mainServices.length === 0 && additionalServices.length === 0 && extraServicesList.length === 0) {
-    return '';
-  }
-
-  const maxRows = Math.max(mainServices.length, additionalServices.length, extraServicesList.length);
-
-  let tableRows = '';
-  for (let i = 0; i < maxRows; i++) {
-    tableRows += `
-        <tr>
-          <td style="padding:6px 8px;text-align:left;border-bottom:1px solid #e5e7eb">${mainServices[i] || ''}</td>
-          <td style="padding:6px 8px;text-align:left;border-bottom:1px solid #e5e7eb">${additionalServices[i] || ''}</td>
-          <td style="padding:6px 8px;text-align:left;border-bottom:1px solid #e5e7eb">${extraServicesList[i] || ''}</td>
-        </tr>`;
-  }
-
-  return `
-<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Service Breakdown</h3>
-<div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div>
-<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-bottom:20px">
-  <thead>
-    <tr style="background-color:#1e3a8a;color:white">
-      <th style="padding:10px 8px;text-align:left;font-weight:bold">Main Services</th>
-      <th style="padding:10px 8px;text-align:left;font-weight:bold">Additional Services</th>
-      <th style="padding:10px 8px;text-align:left;font-weight:bold">Extra Services</th>
-    </tr>
-  </thead>
-  <tbody>
-    ${tableRows}
-  </tbody>
-</table>`;
-}
-
-function formatPricingSection(quote: any): string {
-  const f = (n: number) => `$${Number(n).toFixed(2)}`;
-  const subtotal = Number(quote.subtotal) || 0;
-  const discountValue = Number(quote.discount_value) || 0;
-  const hasDiscount = discountValue > 0 && !!quote.discount_type;
-  const discountAmount = hasDiscount
-    ? computeDiscountAmount(subtotal, quote.discount_type, discountValue)
-    : 0;
-  const discountLabel = hasDiscount && isPercentageDiscount(quote.discount_type)
-    ? `Discount (${discountValue}%):`
-    : 'Discount:';
-
-  return `<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Pricing</h3>
-<table cellpadding="0" cellspacing="0" style="width:100%;background-color:#f0fdf4">
-  <tr>
-    <td style="padding:16px">
-      <table cellpadding="0" cellspacing="0" style="width:100%">
-        <tr>
-          <td style="padding:8px 0;text-align:left">Subtotal:</td>
-          <td style="padding:8px 0;text-align:right">${f(subtotal)}</td>
-        </tr>
-        ${hasDiscount ? `
-        <tr>
-          <td style="padding:8px 0;text-align:left">${discountLabel}</td>
-          <td style="padding:8px 0;text-align:right">-${f(discountAmount)}</td>
-        </tr>` : ''}
-        <tr>
-          <td style="padding:12px 0 0 0;text-align:left;font-weight:bold;font-size:20px;color:#1e3a8a;border-top:1px solid #d1d5db">Total:</td>
-          <td style="padding:12px 0 0 0;text-align:right;font-weight:bold;font-size:20px;color:#1e3a8a;border-top:1px solid #d1d5db">${f(resolveQuoteDisplayTotal(quote))}</td>
-        </tr>
-      </table>
-    </td>
-  </tr>
-</table>`;
-}
-
-/** "Prepared For" replaces the estimate's "Client Information" block. Omitted when empty. */
-function formatRecipientSection(quote: any, recipientEmail: string, recipientName?: string): string {
-  const name = recipientName || quote.recipient_name || '';
-  const phone = quote.recipient_phone || '';
-
-  const lines = [
-    name ? `<strong>Name:</strong> ${name}` : '',
-    `<strong>Email:</strong> ${recipientEmail}`,
-    phone ? `<strong>Phone:</strong> ${phone}` : '',
-  ].filter(Boolean).join('<br>');
-
-  return `<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Prepared For</h3>
-<div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div>
-<p>${lines}</p>`;
-}
-
-function formatServiceDetailsSection(quote: any): string {
-  const serviceType = quote.service_type || 'Residential';
-  const subType = quote.service_sub_type ? ` - ${quote.service_sub_type}` : '';
-
-  return `<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Service Details</h3>
-<div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div>
-<p><strong>Date:</strong> ${getTodayDate()}<br>
-<strong>Service Type:</strong> ${serviceType}${subType}</p>
-
-${quote.service_scope ? `<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Scope of Work</h3><div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div><p>${quote.service_scope}</p>` : ''}`;
-}
-
-const EMAIL_HEAD = `<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-@media only screen and (max-width: 600px) {
-  .email-container {
-    max-width: 100% !important;
-  }
-  .email-body {
-    padding: 10px !important;
-  }
-  .email-content {
-    padding: 10px !important;
-  }
-}
-</style>
-</head>`;
-
-const EMAIL_FOOTER = `<div style="text-align:center;padding:15px;background:#1e3a8a;color:white">
-<p style="margin:0 0 5px 0;font-size:12px">Service provided by</p>
-<p style="margin:0">© 2024 Thunder Pro Inc. | <a href="https://www.thunderpro.co" style="color:white">www.thunderpro.co</a></p>
-</div>`;
-
-// ─── Templates ────────────────────────────────────────────────────────────────
-
-function formatClientActionButtons(acceptUrl: string, viewUrl: string | null): string {
-  return `<div style="text-align:center;margin:30px 0">
-<a href="${acceptUrl}" style="display:inline-block;background:#10b981;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">Accept Quote</a>
-${viewUrl ? `<a href="${viewUrl}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">View Quote</a>` : ''}
-</div>`;
-}
-
-function generateQuickQuoteClientEmailTemplate(
-  quote: any,
-  companyName: string,
-  recipientEmail: string,
-  recipientName: string | undefined,
-  viewUrl: string | null,
-  acceptUrl: string,
-  trackingPixelUrl: string,
-): string {
-  return `<!DOCTYPE html>
-<html>
-${EMAIL_HEAD}
-<body style="margin:0;padding:20px;font-family:Arial,sans-serif">
-<div class="email-container" style="max-width:600px;margin:0 auto">
-
-<div class="email-body" style="text-align:center;padding:15px;background:#1e3a8a;color:white">
-<h1 style="margin:0;font-size:22px">${companyName}</h1>
-<p style="margin:5px 0">Professional Cleaning Quote</p>
-</div>
-
-<div class="email-content" style="padding:15px">
-
-${formatRecipientSection(quote, recipientEmail, recipientName)}
-
-${formatServiceDetailsSection(quote)}
-
-${formatServiceBreakdown(quote)}
-
-${formatPricingSection(quote)}
-
-${formatClientActionButtons(acceptUrl, viewUrl)}
-
-</div>
-
-${EMAIL_FOOTER}
-
-<!-- Tracking pixel to mark email as viewed -->
-<img src="${trackingPixelUrl}" width="1" height="1" style="display:none;" alt="" />
-
-</div>
-</body>
-</html>`;
-}
-
-function generateQuickQuoteOwnerEmailTemplate(
-  quote: any,
-  companyName: string,
-  recipientEmail: string,
-  recipientName: string | undefined,
-  viewUrl: string | null,
-): string {
-  const total = resolveQuoteDisplayTotal(quote);
-  const operationCost = Number(quote.total_operation_cost) || 0;
-  const profit = total - operationCost;
-  const margin = (profit / (total || 1)) * 100;
-
-  return `<!DOCTYPE html>
-<html>
-${EMAIL_HEAD}
-<body style="margin:0;padding:20px;font-family:Arial,sans-serif">
-<div class="email-container" style="max-width:600px;margin:0 auto">
-
-<div class="email-body" style="text-align:center;padding:15px;background:#1e3a8a;color:white">
-<p style="margin:0;font-size:14px;font-weight:bold;background:#1e40af;padding:8px;border-radius:4px">OWNER COPY - INTERNAL USE ONLY</p>
-<h1 style="margin:10px 0 0 0;font-size:22px">${companyName}</h1>
-<p style="margin:5px 0">Professional Cleaning Quote</p>
-</div>
-
-<div class="email-content" style="padding:15px">
-
-<div style="background:#f0fdf4;padding:12px;border-left:4px solid #10b981;margin-bottom:15px">
-<p style="margin:0;font-weight:bold;color:#059669">Internal Cost Breakdown</p>
-<p style="margin:5px 0 0 0;font-size:13px">
-<strong>Labor Cost:</strong> $${(Number(quote.labor_cost) || 0).toFixed(2)} |
-<strong>Supplies:</strong> $${(Number(quote.supplies_cost) || 0).toFixed(2)} |
-<strong>Overhead:</strong> $${(Number(quote.overhead_cost) || 0).toFixed(2)}<br>
-<strong>Total Costs:</strong> $${operationCost.toFixed(2)} |
-<strong>Profit:</strong> $${profit.toFixed(2)} (${margin.toFixed(1)}%)
-</p>
-</div>
-
-${formatRecipientSection(quote, recipientEmail, recipientName)}
-
-${formatServiceDetailsSection(quote)}
-
-${formatServiceBreakdown(quote)}
-
-${formatPricingSection(quote)}
-
-${viewUrl ? `<div style="text-align:center;margin:30px 0">
-<a href="${viewUrl}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">View Quote</a>
-</div>` : ''}
-
-</div>
-
-${EMAIL_FOOTER}
-
-</div>
-</body>
-</html>`;
 }
 
 // ─── SMTP (same transport as send-estimate-email) ─────────────────────────────
@@ -536,43 +203,89 @@ const handler = async (req: Request): Promise<Response> => {
         throw new Error('Quick quote not found');
       }
 
-      // Company branding + owner copy address.
       let companyName = 'Thunder Pro';
       let ownerEmail: string | null = null;
+      let ownerProfile: Record<string, string | null> | null = null;
 
       if (quote.user_id) {
         const { data: profile } = await admin
           .from('profiles')
-          .select('company_name, company_email')
+          .select('first_name, last_name, company_name, company_email, company_phone, company_address, company_apt_suite, company_city, company_state, company_zip, timezone')
           .eq('user_id', quote.user_id)
           .maybeSingle();
 
+        if (profile) ownerProfile = profile;
         if (profile?.company_name) companyName = profile.company_name;
         if (profile?.company_email) ownerEmail = profile.company_email;
       }
 
+      const who = recipientName || quote.recipient_name || '';
+      const clientFirst = personFirstName(who);
+      const ownerName = [ownerProfile?.first_name, ownerProfile?.last_name].filter(Boolean).join(' ').trim();
       const publicSupabaseUrl = resolvePublicSupabaseUrl();
       const trackingPixelUrl =
         `${publicSupabaseUrl}/functions/v1/mark-viewed?type=quick_quote&id=${quote.id}`;
-
-      // Same PDF the SMS link opens. The function returns it inline.
       const viewUrl = resolveDocumentPdfUrl(quote.public_share_token || quote.id);
       const acceptUrl = `${publicSupabaseUrl}/functions/v1/accept-quick-quote?id=${quote.id}`;
+      const dateLabel = quote.quote_date
+        ? formatDateOnlyLong(quote.quote_date, ownerProfile?.timezone || undefined)
+        : formatDateOnlyLong(new Date().toISOString().slice(0, 10));
+      const serviceType = String(quote.service_sub_type || quote.service_type || 'Quote');
+      const documentNumber = documentCode(quote.id);
       console.log("quickquote url", viewUrl);
 
       const clientSubject = isUpdate
         ? `You have an Updated quote - ${companyName}`
         : `Cleaning Quote - ${companyName}`;
       const ownerSubject = isUpdate
-        ? `A quote was updated for ${recipientName || recipientEmail}`
-        : `A quote was sent to ${recipientName || recipientEmail}`;
+        ? `A quote was updated for ${who || recipientEmail}`
+        : `A quote was sent to ${who || recipientEmail}`;
 
-      const clientHtml = generateQuickQuoteClientEmailTemplate(
-        quote, companyName, recipientEmail, recipientName, viewUrl, acceptUrl, trackingPixelUrl,
-      );
-      const ownerHtml = generateQuickQuoteOwnerEmailTemplate(
-        quote, companyName, recipientEmail, recipientName, viewUrl,
-      );
+      const clientContact = {
+        name: who,
+        email: recipientEmail,
+        phone: formatPhoneDisplay(quote.recipient_phone),
+        address: '',
+      };
+      const ownerContact = {
+        name: ownerName || companyName,
+        email: ownerEmail || '',
+        phone: formatPhoneDisplay(ownerProfile?.company_phone),
+        address: formatStreetAddress([
+          ownerProfile?.company_address,
+          ownerProfile?.company_apt_suite,
+          ownerProfile?.company_city,
+          ownerProfile?.company_state,
+          ownerProfile?.company_zip,
+        ]),
+      };
+      const shared = {
+        kind: 'quote' as const,
+        companyName,
+        clientFirstName: clientFirst,
+        documentNumber,
+        dateLabel,
+        serviceType,
+        pdfUrl: viewUrl,
+        isUpdate,
+      };
+      const clientHtml = renderDocumentEmail({
+        ...shared,
+        audience: 'client',
+        moment: 'sent',
+        greetingName: clientFirst,
+        contact: clientContact,
+        acceptUrl,
+        trackingPixelUrl,
+      });
+      const ownerHtml = renderDocumentEmail({
+        ...shared,
+        audience: 'owner',
+        moment: 'sent',
+        greetingName: personFirstName(ownerName),
+        contact: ownerContact,
+        acceptUrl: null,
+      });
 
       console.log(`Sending quick quote ${quote.id} to ${recipientEmail}`);
       await sendEmailViaSMTP(recipientEmail, null, clientSubject, clientHtml, ownerEmail);

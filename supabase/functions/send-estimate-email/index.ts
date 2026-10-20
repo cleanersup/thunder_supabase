@@ -2,6 +2,15 @@ import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
 import { resolveDocumentPdfUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
+import {
+  documentCode,
+  formatPhoneDisplay,
+  formatStreetAddress,
+  personFirstName,
+  renderDocumentEmail,
+  todayLongDate,
+} from "../_shared/documentEmailCard.ts";
+import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -21,755 +30,9 @@ interface EstimateEmailRequest {
   isUpdate?: boolean;
 }
 
-function isPercentageDiscount(type: string | null | undefined): boolean {
-  return type === 'percentage' || type === 'percent';
+function estimateServiceLabel(estimateType: string): string {
+  return estimateType === "commercial" ? "Commercial" : "Residential";
 }
-
-function computeDiscountAmount(
-  subtotal: number,
-  discountType: string | null | undefined,
-  discountValue: number | string | null | undefined,
-): number {
-  const val = Number(discountValue);
-  if (!Number.isFinite(val) || val <= 0) return 0;
-  if (isPercentageDiscount(discountType)) {
-    return subtotal * val / 100;
-  }
-  return val;
-}
-
-function resolveEstimateDisplayTotal(estimate: {
-  subtotal?: number | null;
-  total?: number | null;
-  discount_type?: string | null;
-  discount_value?: number | null;
-}): number {
-  const subtotal = Number(estimate.subtotal) || 0;
-  const storedTotal = Number(estimate.total) || 0;
-
-  if (!estimate.discount_value || Number(estimate.discount_value) <= 0) {
-    return storedTotal || subtotal;
-  }
-
-  const discountAmount = computeDiscountAmount(subtotal, estimate.discount_type, estimate.discount_value);
-  const computedTotal = Math.max(0, subtotal - discountAmount);
-
-  if (Math.abs(storedTotal - subtotal) < 0.01 && computedTotal < subtotal) {
-    return computedTotal;
-  }
-
-  return storedTotal || computedTotal;
-}
-
-const PRICING_SECTION_PATTERN = /<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Pricing<\/h3>[\s\S]*?<\/table>\s*<\/tr>\s*<\/table>/;
-
-function formatCommercialPricingSection(estimate: any): string {
-  const f = (n: number) => `$${Number(n).toFixed(2)}`;
-  const subtotal = Number(estimate.subtotal) || 0;
-  const discountValue = Number(estimate.discount_value) || 0;
-  const hasDiscount = discountValue > 0 && !!estimate.discount_type;
-  const discountAmount = hasDiscount
-    ? computeDiscountAmount(subtotal, estimate.discount_type, discountValue)
-    : 0;
-  const total = resolveEstimateDisplayTotal(estimate);
-  const discountLabel = hasDiscount && isPercentageDiscount(estimate.discount_type)
-    ? `Discount (${discountValue}%):`
-    : 'Discount:';
-
-  return `<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Pricing</h3>
-<table cellpadding="0" cellspacing="0" style="width:100%;background-color:#f0fdf4">
-  <tr>
-    <td style="padding:16px">
-      <table cellpadding="0" cellspacing="0" style="width:100%">
-        <tr>
-          <td style="padding:8px 0;text-align:left">Subtotal:</td>
-          <td style="padding:8px 0;text-align:right">${f(subtotal)}</td>
-        </tr>
-        ${hasDiscount ? `
-        <tr>
-          <td style="padding:8px 0;text-align:left">${discountLabel}</td>
-          <td style="padding:8px 0;text-align:right">-${f(discountAmount)}</td>
-        </tr>` : ''}
-        <tr>
-          <td style="padding:12px 0 0 0;text-align:left;font-weight:bold;font-size:20px;color:#1e3a8a;border-top:1px solid #d1d5db">Total:</td>
-          <td style="padding:12px 0 0 0;text-align:right;font-weight:bold;font-size:20px;color:#1e3a8a;border-top:1px solid #d1d5db">${f(total)}</td>
-        </tr>
-      </table>
-    </td>
-  </tr>
-</table>`;
-}
-
-// Client email template - for customers
-const generateResidentialClientEmailTemplate = (estimate: any, companyInfo: any, trackingPixelUrl: string, publicSupabaseUrl: string, userTimezone?: string): string => {
-  const f = (n: number) => `$${n.toFixed(2)}`;
-
-  // Get today's date - use local date to match server's current day
-  const getTodayDate = () => {
-    const now = new Date();
-    const months = ['January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December'];
-
-    // Debug logging
-    console.log('=== getTodayDate() Debug (Client Template) ===');
-    console.log('Current Date object:', now);
-    console.log('ISO String:', now.toISOString());
-    console.log('UTC Components - Year:', now.getUTCFullYear(), 'Month:', now.getUTCMonth(), 'Day:', now.getUTCDate());
-    console.log('Local Components - Year:', now.getFullYear(), 'Month:', now.getMonth(), 'Day:', now.getDate());
-    console.log('Server Timezone:', Intl.DateTimeFormat().resolvedOptions().timeZone);
-    console.log('UTC Offset (minutes):', now.getTimezoneOffset());
-
-    // Use local date components (server's timezone) to get today's date
-    const year = now.getFullYear();
-    const month = now.getMonth();
-    const day = now.getDate();
-    const formattedDate = `${months[month]} ${day}, ${year}`;
-
-    console.log('Final formatted date:', formattedDate);
-    console.log('===========================================');
-
-    return formattedDate;
-  };
-
-  // Format estimate date in user's timezone
-  // FIX: estimate_date is stored as DATE (YYYY-MM-DD) without timezone info
-  // Problem: new Date("2024-12-26") is interpreted as UTC midnight (2024-12-26T00:00:00Z)
-  // When formatted in timezone like "America/New_York" (UTC-5), it becomes 2024-12-25T19:00:00 (previous day)
-  // Solution: Parse date components and create date at midday in UTC to avoid day shift
-  const formatDate = (dateStr: string) => {
-    if (!dateStr) return 'N/A';
-    try {
-      // Parse date string (YYYY-MM-DD format from database)
-      const [year, month, day] = dateStr.split('-').map(Number);
-
-      // Create date at midday (12:00) UTC to avoid timezone edge cases
-      // This ensures the date stays correct regardless of timezone offset
-      const dateAtMidday = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-
-      // Format in user's timezone - using midday ensures date is always correct
-      return new Intl.DateTimeFormat('en-US', {
-        timeZone: userTimezone || 'UTC',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-      }).format(dateAtMidday);
-    } catch (error) {
-      console.error('Error formatting date:', error);
-      return dateStr;
-    }
-  };
-
-  // Helper function to format service breakdown
-  const formatServiceBreakdown = () => {
-    const mainData = estimate.main_data || {};
-    const additionalData = estimate.additional_data || {};
-    const extraServices = estimate.extra_services || {};
-
-    // Helper to safely get numeric value from data (handles both camelCase and snake_case)
-    const getNumericValue = (data: any, camelKey: string, snakeKey?: string) => {
-      const value = data[camelKey] ?? data[snakeKey || camelKey.toLowerCase()];
-      if (value === null || value === undefined || value === '') return 0;
-      const numValue = Number(value);
-      return isNaN(numValue) ? 0 : numValue;
-    };
-
-    // Format main services - include ALL available fields
-    const mainServices: string[] = [];
-    const bedrooms = getNumericValue(mainData, 'bedrooms');
-    const kitchens = getNumericValue(mainData, 'kitchens');
-    const livingRooms = getNumericValue(mainData, 'livingRooms', 'living_rooms');
-    const diningRooms = getNumericValue(mainData, 'diningRooms', 'dining_rooms');
-    const offices = getNumericValue(mainData, 'offices');
-    const fullBaths = getNumericValue(mainData, 'fullBaths', 'full_baths');
-    const halfBaths = getNumericValue(mainData, 'halfBaths', 'half_baths');
-
-    if (bedrooms > 0) mainServices.push(`${bedrooms}x Bedrooms`);
-    if (kitchens > 0) mainServices.push(`${kitchens}x Kitchens`);
-    if (livingRooms > 0) mainServices.push(`${livingRooms}x Living Rooms`);
-    if (diningRooms > 0) mainServices.push(`${diningRooms}x Dining Rooms`);
-    if (offices > 0) mainServices.push(`${offices}x Offices`);
-    if (fullBaths > 0) mainServices.push(`${fullBaths}x Full Baths`);
-    if (halfBaths > 0) mainServices.push(`${halfBaths}x Half Baths`);
-    if (mainData.squareFootage || mainData.square_footage) mainServices.push(`1x Square Footage`);
-
-    // Format additional services - include ALL available fields
-    const additionalServices: string[] = [];
-    const fans = getNumericValue(additionalData, 'fans');
-    const oven = getNumericValue(additionalData, 'oven');
-    const refrigerator = getNumericValue(additionalData, 'refrigerator');
-    const blinds = getNumericValue(additionalData, 'blinds');
-    const windowsInside = getNumericValue(additionalData, 'windowsInside', 'windows_inside');
-    const windowsOutside = getNumericValue(additionalData, 'windowsOutside', 'windows_outside');
-
-    if (fans > 0) additionalServices.push(`${fans}x Fans`);
-    if (oven > 0) additionalServices.push(`${oven}x Oven`);
-    if (refrigerator > 0) additionalServices.push(`${refrigerator}x Refrigerator`);
-    if (blinds > 0) additionalServices.push(`${blinds}x Blinds`);
-    if (windowsInside > 0) additionalServices.push(`${windowsInside}x Windows Inside`);
-    if (windowsOutside > 0) additionalServices.push(`${windowsOutside}x Windows Outside`);
-
-    // Format extra services (these are boolean values) - include ALL available fields
-    const extraServicesList: string[] = [];
-    if (extraServices.baseboard) extraServicesList.push('1x Baseboards');
-    if (extraServices.patio) extraServicesList.push('1x Patio');
-    if (extraServices.walls) extraServicesList.push('1x Walls');
-    if (extraServices.stairs) extraServicesList.push('1x Stairs');
-    if (extraServices.cabinetInside || extraServices.cabinet_inside) extraServicesList.push('1x Cabinet Inside');
-    if (extraServices.cabinetOutside || extraServices.cabinet_outside) extraServicesList.push('1x Cabinet Outside');
-    if (extraServices.washDishes || extraServices.wash_dishes) extraServicesList.push('1x Wash Dishes');
-    if (extraServices.hallways) extraServicesList.push('1x Hallways');
-    if (extraServices.basement) extraServicesList.push('1x Basement');
-
-    // Only show Service Breakdown if there are any services
-    if (mainServices.length === 0 && additionalServices.length === 0 && extraServicesList.length === 0) {
-      return '';
-    }
-
-    // Calculate max rows needed
-    const maxRows = Math.max(mainServices.length, additionalServices.length, extraServicesList.length);
-
-    let tableRows = '';
-    for (let i = 0; i < maxRows; i++) {
-      const mainService = mainServices[i] || '';
-      const additionalService = additionalServices[i] || '';
-      const extraService = extraServicesList[i] || '';
-
-      tableRows += `
-        <tr>
-          <td style="padding:6px 8px;text-align:left;border-bottom:1px solid #e5e7eb">${mainService}</td>
-          <td style="padding:6px 8px;text-align:left;border-bottom:1px solid #e5e7eb">${additionalService}</td>
-          <td style="padding:6px 8px;text-align:left;border-bottom:1px solid #e5e7eb">${extraService}</td>
-        </tr>`;
-    }
-
-    return `
-<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Service Breakdown</h3>
-<div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div>
-<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-bottom:20px">
-  <thead>
-    <tr style="background-color:#1e3a8a;color:white">
-      <th style="padding:10px 8px;text-align:left;font-weight:bold">Main Services</th>
-      <th style="padding:10px 8px;text-align:left;font-weight:bold">Additional Services</th>
-      <th style="padding:10px 8px;text-align:left;font-weight:bold">Extra Services</th>
-    </tr>
-  </thead>
-  <tbody>
-    ${tableRows}
-  </tbody>
-</table>`;
-  };
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-@media only screen and (max-width: 600px) {
-  .email-container {
-    max-width: 100% !important;
-  }
-  .email-body {
-    padding: 10px !important;
-  }
-  .email-content {
-    padding: 10px !important;
-  }
-}
-</style>
-</head>
-<body style="margin:0;padding:20px;font-family:Arial,sans-serif">
-<div class="email-container" style="max-width:600px;margin:0 auto">
-
-<div class="email-body" style="text-align:center;padding:15px;background:#1e3a8a;color:white">
-<h1 style="margin:0;font-size:22px">${estimate.company_name || 'Company'}</h1>
-<p style="margin:5px 0">Professional Cleaning Estimate</p>
-</div>
-
-<div class="email-content" style="padding:15px">
-
-<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Client Information</h3>
-<div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div>
-<p><strong>Name:</strong> ${estimate.client_name}<br>
-<strong>Email:</strong> ${estimate.email}<br>
-<strong>Phone:</strong> ${estimate.phone}<br>
-<strong>Address:</strong> ${estimate.address}${estimate.apt ? `, ${estimate.apt}` : ''}, ${estimate.city}, ${estimate.state} ${estimate.zip}</p>
-
-<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Service Details</h3>
-<div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div>
-<p><strong>Date:</strong> ${getTodayDate()}<br>
-<strong>Service Type:</strong> ${estimate.service_type}${estimate.service_sub_type ? ` - ${estimate.service_sub_type}` : ''}</p>
-
-${estimate.service_scope ? `<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Scope of Work</h3><div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div><p>${estimate.service_scope}</p>` : ''}
-
-${formatServiceBreakdown()}
-
-<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Pricing</h3>
-<table cellpadding="0" cellspacing="0" style="width:100%;background-color:#f0fdf4">
-  <tr>
-    <td style="padding:16px">
-      <table cellpadding="0" cellspacing="0" style="width:100%">
-        <tr>
-          <td style="padding:8px 0;text-align:left">Subtotal:</td>
-          <td style="padding:8px 0;text-align:right">${f(estimate.subtotal || 0)}</td>
-        </tr>
-        ${estimate.discount_value && estimate.discount_value > 0 ? `
-        <tr>
-          <td style="padding:8px 0;text-align:left">Discount:</td>
-          <td style="padding:8px 0;text-align:right">-${f(estimate.discount_type === 'percentage' ? (estimate.subtotal * estimate.discount_value / 100) : estimate.discount_value)}</td>
-        </tr>` : ''}
-        <tr>
-          <td style="padding:12px 0 0 0;text-align:left;font-weight:bold;font-size:20px;color:#1e3a8a;border-top:1px solid #d1d5db">Total:</td>
-          <td style="padding:12px 0 0 0;text-align:right;font-weight:bold;font-size:20px;color:#1e3a8a;border-top:1px solid #d1d5db">${f(resolveEstimateDisplayTotal(estimate))}</td>
-        </tr>
-      </table>
-    </td>
-  </tr>
-</table>
-
-<div style="text-align:center;margin:30px 0">
-<a href="${publicSupabaseUrl}/functions/v1/accept-estimate?id=${estimate.id}" style="display:inline-block;background:#10b981;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">Accept Estimate</a>
-<a href="${resolveDocumentPdfUrl(estimate.public_share_token || estimate.id) ?? "#"}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">View Estimate</a>
-</div>
-
-</div>
-
-<div style="text-align:center;padding:15px;background:#1e3a8a;color:white">
-<p style="margin:0 0 5px 0;font-size:12px">Service provided by</p>
-<p style="margin:0">© 2024 Thunder Pro Inc. | <a href="https://www.thunderpro.co" style="color:white">www.thunderpro.co</a></p>
-</div>
-
-<!-- Tracking pixel to mark email as viewed -->
-<img src="${trackingPixelUrl}" width="1" height="1" style="display:none;" alt="" />
-
-</div>
-</body>
-</html>`;
-};
-
-// Owner/User email template - for business owner (same design as client initially)
-const generateResidentialOwnerEmailTemplate = (estimate: any, companyInfo: any, publicSupabaseUrl: string, userTimezone?: string): string => {
-  const f = (n: number) => `$${n.toFixed(2)}`;
-
-  // Get today's date - use local date to match server's current day
-  const getTodayDate = () => {
-    const now = new Date();
-    const months = ['January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December'];
-
-    // Debug logging
-    console.log('=== getTodayDate() Debug (Owner Template) ===');
-    console.log('Current Date object:', now);
-    console.log('ISO String:', now.toISOString());
-    console.log('UTC Components - Year:', now.getUTCFullYear(), 'Month:', now.getUTCMonth(), 'Day:', now.getUTCDate());
-    console.log('Local Components - Year:', now.getFullYear(), 'Month:', now.getMonth(), 'Day:', now.getDate());
-    console.log('Server Timezone:', Intl.DateTimeFormat().resolvedOptions().timeZone);
-    console.log('UTC Offset (minutes):', now.getTimezoneOffset());
-
-    // Use local date components (server's timezone) to get today's date
-    const year = now.getFullYear();
-    const month = now.getMonth();
-    const day = now.getDate();
-    const formattedDate = `${months[month]} ${day}, ${year}`;
-
-    console.log('Final formatted date:', formattedDate);
-    console.log('===========================================');
-
-    return formattedDate;
-  };
-
-  // Format estimate date in user's timezone
-  // FIX: estimate_date is stored as DATE (YYYY-MM-DD) without timezone info
-  // Problem: new Date("2024-12-26") is interpreted as UTC midnight (2024-12-26T00:00:00Z)
-  // When formatted in timezone like "America/New_York" (UTC-5), it becomes 2024-12-25T19:00:00 (previous day)
-  // Solution: Parse date components and create date at midday in UTC to avoid day shift
-  const formatDate = (dateStr: string) => {
-    if (!dateStr) return 'N/A';
-    try {
-      // Parse date string (YYYY-MM-DD format from database)
-      const [year, month, day] = dateStr.split('-').map(Number);
-
-      // Create date at midday (12:00) UTC to avoid timezone edge cases
-      // This ensures the date stays correct regardless of timezone offset
-      const dateAtMidday = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-
-      // Format in user's timezone - using midday ensures date is always correct
-      return new Intl.DateTimeFormat('en-US', {
-        timeZone: userTimezone || 'UTC',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-      }).format(dateAtMidday);
-    } catch (error) {
-      console.error('Error formatting date:', error);
-      return dateStr;
-    }
-  };
-
-  // Helper function to format service breakdown
-  const formatServiceBreakdown = () => {
-    const mainData = estimate.main_data || {};
-    const additionalData = estimate.additional_data || {};
-    const extraServices = estimate.extra_services || {};
-
-    // Helper to safely get numeric value from data (handles both camelCase and snake_case)
-    const getNumericValue = (data: any, camelKey: string, snakeKey?: string) => {
-      const value = data[camelKey] ?? data[snakeKey || camelKey.toLowerCase()];
-      if (value === null || value === undefined || value === '') return 0;
-      const numValue = Number(value);
-      return isNaN(numValue) ? 0 : numValue;
-    };
-
-    // Format main services - include ALL available fields
-    const mainServices: string[] = [];
-    const bedrooms = getNumericValue(mainData, 'bedrooms');
-    const kitchens = getNumericValue(mainData, 'kitchens');
-    const livingRooms = getNumericValue(mainData, 'livingRooms', 'living_rooms');
-    const diningRooms = getNumericValue(mainData, 'diningRooms', 'dining_rooms');
-    const offices = getNumericValue(mainData, 'offices');
-    const fullBaths = getNumericValue(mainData, 'fullBaths', 'full_baths');
-    const halfBaths = getNumericValue(mainData, 'halfBaths', 'half_baths');
-
-    if (bedrooms > 0) mainServices.push(`${bedrooms}x Bedrooms`);
-    if (kitchens > 0) mainServices.push(`${kitchens}x Kitchens`);
-    if (livingRooms > 0) mainServices.push(`${livingRooms}x Living Rooms`);
-    if (diningRooms > 0) mainServices.push(`${diningRooms}x Dining Rooms`);
-    if (offices > 0) mainServices.push(`${offices}x Offices`);
-    if (fullBaths > 0) mainServices.push(`${fullBaths}x Full Baths`);
-    if (halfBaths > 0) mainServices.push(`${halfBaths}x Half Baths`);
-    if (mainData.squareFootage || mainData.square_footage) mainServices.push(`1x Square Footage`);
-
-    // Format additional services - include ALL available fields
-    const additionalServices: string[] = [];
-    const fans = getNumericValue(additionalData, 'fans');
-    const oven = getNumericValue(additionalData, 'oven');
-    const refrigerator = getNumericValue(additionalData, 'refrigerator');
-    const blinds = getNumericValue(additionalData, 'blinds');
-    const windowsInside = getNumericValue(additionalData, 'windowsInside', 'windows_inside');
-    const windowsOutside = getNumericValue(additionalData, 'windowsOutside', 'windows_outside');
-
-    if (fans > 0) additionalServices.push(`${fans}x Fans`);
-    if (oven > 0) additionalServices.push(`${oven}x Oven`);
-    if (refrigerator > 0) additionalServices.push(`${refrigerator}x Refrigerator`);
-    if (blinds > 0) additionalServices.push(`${blinds}x Blinds`);
-    if (windowsInside > 0) additionalServices.push(`${windowsInside}x Windows Inside`);
-    if (windowsOutside > 0) additionalServices.push(`${windowsOutside}x Windows Outside`);
-
-    // Format extra services (these are boolean values) - include ALL available fields
-    const extraServicesList: string[] = [];
-    if (extraServices.baseboard) extraServicesList.push('1x Baseboards');
-    if (extraServices.patio) extraServicesList.push('1x Patio');
-    if (extraServices.walls) extraServicesList.push('1x Walls');
-    if (extraServices.stairs) extraServicesList.push('1x Stairs');
-    if (extraServices.cabinetInside || extraServices.cabinet_inside) extraServicesList.push('1x Cabinet Inside');
-    if (extraServices.cabinetOutside || extraServices.cabinet_outside) extraServicesList.push('1x Cabinet Outside');
-    if (extraServices.washDishes || extraServices.wash_dishes) extraServicesList.push('1x Wash Dishes');
-    if (extraServices.hallways) extraServicesList.push('1x Hallways');
-    if (extraServices.basement) extraServicesList.push('1x Basement');
-
-    // Only show Service Breakdown if there are any services
-    if (mainServices.length === 0 && additionalServices.length === 0 && extraServicesList.length === 0) {
-      return '';
-    }
-
-    // Calculate max rows needed
-    const maxRows = Math.max(mainServices.length, additionalServices.length, extraServicesList.length);
-
-    let tableRows = '';
-    for (let i = 0; i < maxRows; i++) {
-      const mainService = mainServices[i] || '';
-      const additionalService = additionalServices[i] || '';
-      const extraService = extraServicesList[i] || '';
-
-      tableRows += `
-        <tr>
-          <td style="padding:6px 8px;text-align:left;border-bottom:1px solid #e5e7eb">${mainService}</td>
-          <td style="padding:6px 8px;text-align:left;border-bottom:1px solid #e5e7eb">${additionalService}</td>
-          <td style="padding:6px 8px;text-align:left;border-bottom:1px solid #e5e7eb">${extraService}</td>
-        </tr>`;
-    }
-
-    return `
-<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Service Breakdown</h3>
-<div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div>
-<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-bottom:20px">
-  <thead>
-    <tr style="background-color:#1e3a8a;color:white">
-      <th style="padding:10px 8px;text-align:left;font-weight:bold">Main Services</th>
-      <th style="padding:10px 8px;text-align:left;font-weight:bold">Additional Services</th>
-      <th style="padding:10px 8px;text-align:left;font-weight:bold">Extra Services</th>
-    </tr>
-  </thead>
-  <tbody>
-    ${tableRows}
-  </tbody>
-</table>`;
-  };
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-@media only screen and (max-width: 600px) {
-  .email-container {
-    max-width: 100% !important;
-  }
-  .email-body {
-    padding: 10px !important;
-  }
-  .email-content {
-    padding: 10px !important;
-  }
-}
-</style>
-</head>
-<body style="margin:0;padding:20px;font-family:Arial,sans-serif">
-<div class="email-container" style="max-width:600px;margin:0 auto">
-
-<div class="email-body" style="text-align:center;padding:15px;background:#1e3a8a;color:white">
-<p style="margin:0;font-size:14px;font-weight:bold;background:#1e40af;padding:8px;border-radius:4px">OWNER COPY - INTERNAL USE ONLY</p>
-<h1 style="margin:10px 0 0 0;font-size:22px">${estimate.company_name || 'Company'}</h1>
-<p style="margin:5px 0">Professional Cleaning Estimate</p>
-</div>
-
-<div class="email-content" style="padding:15px">
-
-<div style="background:#f0fdf4;padding:12px;border-left:4px solid #10b981;margin-bottom:15px">
-<p style="margin:0;font-weight:bold;color:#059669">Internal Cost Breakdown</p>
-<p style="margin:5px 0 0 0;font-size:13px">
-<strong>Labor Cost:</strong> $${(estimate.labor_cost || 0).toFixed(2)} | 
-<strong>Supplies:</strong> $${(estimate.supplies_cost || 0).toFixed(2)} | 
-<strong>Overhead:</strong> $${(estimate.overhead_cost || 0).toFixed(2)}<br>
-<strong>Total Costs:</strong> $${(estimate.total_operation_cost || 0).toFixed(2)} | 
-<strong>Profit:</strong> $${(resolveEstimateDisplayTotal(estimate) - (estimate.total_operation_cost || 0)).toFixed(2)}
-(${((resolveEstimateDisplayTotal(estimate) - (estimate.total_operation_cost || 0)) / (resolveEstimateDisplayTotal(estimate) || 1) * 100).toFixed(1)}%)
-</p>
-</div>
-
-<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Client Information</h3>
-<div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div>
-<p><strong>Name:</strong> ${estimate.client_name}<br>
-<strong>Email:</strong> ${estimate.email}<br>
-<strong>Phone:</strong> ${estimate.phone}<br>
-<strong>Address:</strong> ${estimate.address}${estimate.apt ? `, ${estimate.apt}` : ''}, ${estimate.city}, ${estimate.state} ${estimate.zip}</p>
-
-<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Service Details</h3>
-<div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div>
-<p><strong>Date:</strong> ${getTodayDate()}<br>
-<strong>Service Type:</strong> ${estimate.service_type}${estimate.service_sub_type ? ` - ${estimate.service_sub_type}` : ''}</p>
-
-${estimate.service_scope ? `<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Scope of Work</h3><div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div><p>${estimate.service_scope}</p>` : ''}
-
-${formatServiceBreakdown()}
-
-<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Pricing</h3>
-<table cellpadding="0" cellspacing="0" style="width:100%;background-color:#f0fdf4">
-  <tr>
-    <td style="padding:16px">
-      <table cellpadding="0" cellspacing="0" style="width:100%">
-        <tr>
-          <td style="padding:8px 0;text-align:left">Subtotal:</td>
-          <td style="padding:8px 0;text-align:right">${f(estimate.subtotal || 0)}</td>
-        </tr>
-        ${estimate.discount_value && estimate.discount_value > 0 ? `
-        <tr>
-          <td style="padding:8px 0;text-align:left">Discount:</td>
-          <td style="padding:8px 0;text-align:right">-${f(estimate.discount_type === 'percentage' ? (estimate.subtotal * estimate.discount_value / 100) : estimate.discount_value)}</td>
-        </tr>` : ''}
-        <tr>
-          <td style="padding:12px 0 0 0;text-align:left;font-weight:bold;font-size:20px;color:#1e3a8a;border-top:1px solid #d1d5db">Total:</td>
-          <td style="padding:12px 0 0 0;text-align:right;font-weight:bold;font-size:20px;color:#1e3a8a;border-top:1px solid #d1d5db">${f(resolveEstimateDisplayTotal(estimate))}</td>
-        </tr>
-      </table>
-    </td>
-  </tr>
-</table>
-
-<div style="text-align:center;margin:30px 0">
-<a href="${resolveDocumentPdfUrl(estimate.public_share_token || estimate.id) ?? "#"}" style="display:inline-block;background:#1e3a8a;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">View Estimate</a>
-</div>
-
-</div>
-
-<div style="text-align:center;padding:15px;background:#1e3a8a;color:white">
-<p style="margin:0 0 5px 0;font-size:12px">Service provided by</p>
-<p style="margin:0">© 2024 Thunder Pro Inc. | <a href="https://www.thunderpro.co" style="color:white">www.thunderpro.co</a></p>
-</div>
-
-</div>
-</body>
-</html>`;
-};
-
-// Helper function to format commercial specifications
-const formatCommercialSpecifications = (estimate: any): string => {
-  const mainData = estimate.main_data || {};
-  const additionalData = estimate.additional_data || {};
-
-  // Helper to safely get value
-  const getValue = (value: any): string => {
-    if (value === null || value === undefined || value === '') return '';
-    return String(value);
-  };
-
-  // Format extra services array
-  const formatExtraServices = (extraServices: any): string => {
-    if (!extraServices) return '';
-    if (Array.isArray(extraServices)) {
-      return extraServices.filter(s => s).join(', ');
-    }
-    if (typeof extraServices === 'object') {
-      return Object.keys(extraServices).filter(key => extraServices[key]).join(', ');
-    }
-    return String(extraServices);
-  };
-
-  const propertyType = getValue(mainData.propertyType);
-  const serviceType = getValue(mainData.serviceType);
-  const extraServices = formatExtraServices(additionalData.extraServices);
-
-  // Handle cleaningDuration - can be number or string
-  let cleaningDuration = '';
-  if (mainData.cleaningDuration !== null && mainData.cleaningDuration !== undefined && mainData.cleaningDuration !== '') {
-    const duration = String(mainData.cleaningDuration);
-    cleaningDuration = duration.includes('hours') || duration.includes('hour') ? duration : `${duration} hours`;
-  }
-
-  const propertySize = getValue(mainData.propertySize);
-  const serviceSchedule = getValue(additionalData.serviceSchedule);
-  const startTime = getValue(mainData.startTime);
-
-  // Only show section if there's at least one commercial-specific field
-  if (!propertyType && !serviceType && !extraServices && !cleaningDuration && !propertySize && !serviceSchedule && !startTime && !estimate.service_scope) {
-    return '';
-  }
-
-  // Build left column
-  const leftColumn: string[] = [];
-  if (propertyType) leftColumn.push(`<strong>Property Type:</strong> ${propertyType}`);
-  if (serviceType) leftColumn.push(`<strong>Service Type:</strong> ${serviceType}`);
-  if (extraServices) leftColumn.push(`<strong>Extra Services:</strong> ${extraServices}`);
-  if (cleaningDuration) leftColumn.push(`<strong>Cleaning Duration:</strong> ${cleaningDuration}`);
-  if (estimate.service_scope) leftColumn.push(`<strong>Service Scope:</strong> ${estimate.service_scope}`);
-
-  // Build right column
-  const rightColumn: string[] = [];
-  if (propertySize) {
-    const sizeValue = propertySize.includes('sqft') || propertySize.includes('sq ft') ? propertySize : `${propertySize} sqft`;
-    rightColumn.push(`<strong>Property Size:</strong> ${sizeValue}`);
-  }
-  if (serviceSchedule) rightColumn.push(`<strong>Service Schedule:</strong> ${serviceSchedule}`);
-  if (startTime) rightColumn.push(`<strong>Time:</strong> ${startTime}`);
-
-  // Calculate max rows
-  const maxRows = Math.max(leftColumn.length, rightColumn.length);
-
-  let tableRows = '';
-  for (let i = 0; i < maxRows; i++) {
-    const leftCell = leftColumn[i] || '';
-    const rightCell = rightColumn[i] || '';
-    tableRows += `
-      <tr>
-        <td style="padding:6px 8px;text-align:left;vertical-align:top;border-bottom:1px solid #e5e7eb">${leftCell}</td>
-        <td style="padding:6px 8px;text-align:left;vertical-align:top;border-bottom:1px solid #e5e7eb">${rightCell}</td>
-      </tr>`;
-  }
-
-  return `
-<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Service Specifications</h3>
-<div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div>
-<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-bottom:20px">
-  <tbody>
-    ${tableRows}
-  </tbody>
-</table>`;
-};
-
-// Function to generate commercial estimate HTML template  
-const generateCommercialClientEmailTemplate = (estimate: any, companyInfo: any, trackingPixelUrl: string, publicSupabaseUrl: string, userTimezone?: string): string => {
-  // Get the residential template HTML
-  const residentialHtml = generateResidentialClientEmailTemplate(estimate, companyInfo, trackingPixelUrl, publicSupabaseUrl, userTimezone);
-
-  // Replace "Residential" with "Commercial"
-  let commercialHtml = residentialHtml.replace(/Residential/g, 'Commercial');
-
-  // Add commercial specifications section after Service Details and before Scope of Work/Service Breakdown
-  const specificationsSection = formatCommercialSpecifications(estimate);
-
-  if (specificationsSection) {
-    // Insert specifications section after Service Details section (after </p> tag)
-    // Look for the pattern: Service Type line ends with </p>, then either Scope of Work or Service Breakdown or Pricing
-    const serviceDetailsEndPattern = /(<strong>Service Type:<\/strong>.*?<\/p>)/;
-
-    // Try to insert before Scope of Work first
-    if (commercialHtml.includes('<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Scope of Work</h3>')) {
-      commercialHtml = commercialHtml.replace(
-        /(<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Scope of Work<\/h3>)/,
-        `${specificationsSection}$1`
-      );
-    }
-    // Otherwise insert before Service Breakdown
-    else if (commercialHtml.includes('<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Service Breakdown</h3>')) {
-      commercialHtml = commercialHtml.replace(
-        /(<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Service Breakdown<\/h3>)/,
-        `${specificationsSection}$1`
-      );
-    }
-    // Otherwise insert after Service Details section (before Pricing)
-    else {
-      commercialHtml = commercialHtml.replace(
-        /(<strong>Service Type:<\/strong>.*?<\/p>)/,
-        `$1${specificationsSection}`
-      );
-    }
-  }
-
-  commercialHtml = commercialHtml.replace(PRICING_SECTION_PATTERN, formatCommercialPricingSection(estimate));
-
-  return commercialHtml;
-};
-
-const generateCommercialOwnerEmailTemplate = (estimate: any, companyInfo: any, publicSupabaseUrl: string, userTimezone?: string): string => {
-  // Get the residential template HTML
-  const residentialHtml = generateResidentialOwnerEmailTemplate(estimate, companyInfo, publicSupabaseUrl, userTimezone);
-
-  // Replace "Residential" with "Commercial"
-  let commercialHtml = residentialHtml.replace(/Residential/g, 'Commercial');
-
-  // Add commercial specifications section after Service Details and before Scope of Work/Service Breakdown
-  const specificationsSection = formatCommercialSpecifications(estimate);
-
-  if (specificationsSection) {
-    // Insert specifications section after Service Details section (after </p> tag)
-    // Try to insert before Scope of Work first
-    if (commercialHtml.includes('<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Scope of Work</h3>')) {
-      commercialHtml = commercialHtml.replace(
-        /(<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Scope of Work<\/h3>)/,
-        `${specificationsSection}$1`
-      );
-    }
-    // Otherwise insert before Service Breakdown
-    else if (commercialHtml.includes('<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Service Breakdown</h3>')) {
-      commercialHtml = commercialHtml.replace(
-        /(<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Service Breakdown<\/h3>)/,
-        `${specificationsSection}$1`
-      );
-    }
-    // Otherwise insert after Service Details section (before Pricing)
-    else {
-      commercialHtml = commercialHtml.replace(
-        /(<strong>Service Type:<\/strong>.*?<\/p>)/,
-        `$1${specificationsSection}`
-      );
-    }
-  }
-
-  commercialHtml = commercialHtml.replace(PRICING_SECTION_PATTERN, formatCommercialPricingSection(estimate));
-
-  return commercialHtml;
-};
 
 // Function to convert file to base64 (for embedding badges in email)
 async function getImageAsBase64(imagePath: string): Promise<string> {
@@ -978,6 +241,7 @@ const handler = async (req: Request): Promise<Response> => {
 
       let ownerEmail: string | null = null;
       let userTimezone: string = 'UTC';
+      let ownerProfile: Record<string, string | null> | null = null;
 
       if (authHeader) {
         try {
@@ -997,7 +261,7 @@ const handler = async (req: Request): Promise<Response> => {
             // Now get the company_email and timezone from profiles table
             const { data: profile, error: profileError } = await supabaseClient
               .from('profiles')
-              .select('company_email, timezone')
+              .select('first_name, last_name, company_name, company_email, company_phone, company_address, company_apt_suite, company_city, company_state, company_zip, timezone')
               .eq('user_id', user.id)
               .single();
 
@@ -1008,6 +272,7 @@ const handler = async (req: Request): Promise<Response> => {
               error: profileError?.message
             });
 
+            if (profile) ownerProfile = profile;
             if (profile?.company_email) {
               ownerEmail = profile.company_email;
               console.log('✓ Owner email obtained from company profile:', ownerEmail);
@@ -1033,59 +298,84 @@ const handler = async (req: Request): Promise<Response> => {
 
       console.log('Final company email for BCC:', ownerEmail);
 
-      const companyInfo = {
-        company_name: 'Thunder Pro',
-        company_logo: estimateData.company_logo || '',
-        company_email: 'info@thunderpro.co', // Static company email
-        company_phone: estimateData.phone || '',
+      const publicSupabaseUrl = resolvePublicSupabaseUrl();
+      const pdfUrl = resolveDocumentPdfUrl(estimateData.public_share_token || estimateData.id);
+      console.log('Public Supabase URL for estimate email links:', publicSupabaseUrl);
+      console.log('estimate url', pdfUrl);
+
+      const trackingPixelUrl = `${publicSupabaseUrl}/functions/v1/mark-viewed?type=estimate&id=${estimateData.id}`;
+      const acceptUrl = `${publicSupabaseUrl}/functions/v1/accept-estimate?id=${estimateData.id}`;
+      const companyName = ownerProfile?.company_name || estimateData.company_name || 'Company Name';
+      const clientFirst = personFirstName(estimateData.client_name);
+      const ownerName = [ownerProfile?.first_name, ownerProfile?.last_name].filter(Boolean).join(' ').trim();
+      const dateLabel = estimateData.estimate_date
+        ? formatDateOnlyLong(estimateData.estimate_date, userTimezone)
+        : todayLongDate();
+      const serviceType = estimateServiceLabel(estimateType);
+      const documentNumber = documentCode(estimateData.id);
+      const clientContact = {
+        name: String(estimateData.client_name || ''),
+        email: String(recipientEmail || estimateData.email || ''),
+        phone: formatPhoneDisplay(estimateData.phone),
+        address: formatStreetAddress([
+          estimateData.address,
+          estimateData.apt,
+          estimateData.city,
+          estimateData.state,
+          estimateData.zip,
+        ]),
+      };
+      const ownerContact = {
+        name: ownerName || companyName,
+        email: String(ownerEmail || ownerProfile?.company_email || ''),
+        phone: formatPhoneDisplay(ownerProfile?.company_phone),
+        address: formatStreetAddress([
+          ownerProfile?.company_address,
+          ownerProfile?.company_apt_suite,
+          ownerProfile?.company_city,
+          ownerProfile?.company_state,
+          ownerProfile?.company_zip,
+        ]),
       };
 
-      // Public URL for Edge Functions (accept, download PDF, tracking pixel).
-      const publicSupabaseUrl = resolvePublicSupabaseUrl();
-      console.log('Public Supabase URL for estimate email links:', publicSupabaseUrl);
-      console.log('estimate url', resolveDocumentPdfUrl(estimateData.public_share_token || estimateData.id));
+      const clientSubject = isUpdate
+        ? `You have an Updated estimate - ${companyName}`
+        : `${serviceType} Cleaning Estimate - ${companyName}`;
+      const ownerSubject = isUpdate
+        ? `An estimate was updated for ${estimateData.client_name}`
+        : `An estimate was sent to ${estimateData.client_name}`;
 
-      // Generate tracking pixel URL (use public URL so email clients can reach it)
-      const trackingPixelUrl = `${publicSupabaseUrl}/functions/v1/mark-viewed?type=estimate&id=${estimateData.id}`;
-
-      let clientHtmlContent: string;
-      let ownerHtmlContent: string;
-      let clientSubject: string;
-      let ownerSubject: string;
-      const companyName = estimateData.company_name || 'Company Name';
-
-      if (estimateType === 'residential') {
-        clientSubject = isUpdate ? `You have an Updated estimate - ${companyName}` : `Residential Cleaning Estimate - ${companyName}`;
-        ownerSubject = isUpdate ? `An estimate was updated for ${estimateData.client_name}` : `An estimate was sent to ${estimateData.client_name}`;
-        clientHtmlContent = generateResidentialClientEmailTemplate(estimateData, companyInfo, trackingPixelUrl, publicSupabaseUrl, userTimezone);
-        ownerHtmlContent = generateResidentialOwnerEmailTemplate(estimateData, companyInfo, publicSupabaseUrl, userTimezone);
-      } else {
-        clientSubject = isUpdate ? `You have an Updated estimate - ${companyName}` : `Commercial Cleaning Estimate - ${companyName}`;
-        ownerSubject = isUpdate ? `An estimate was updated for ${estimateData.client_name}` : `An estimate was sent to ${estimateData.client_name}`;
-        clientHtmlContent = generateCommercialClientEmailTemplate(estimateData, companyInfo, trackingPixelUrl, publicSupabaseUrl, userTimezone);
-        ownerHtmlContent = generateCommercialOwnerEmailTemplate(estimateData, companyInfo, publicSupabaseUrl, userTimezone);
-      }
-
-      // Debug: Extract and log the date from the generated HTML
-      console.log('=== Generated HTML Date Check ===');
-      const dateMatch = clientHtmlContent.match(/<strong>Date:<\/strong>\s*([^<]+)/);
-      if (dateMatch) {
-        console.log('Date found in HTML:', dateMatch[1].trim());
-      } else {
-        console.log('⚠️ Date pattern not found in HTML');
-        // Try alternative pattern
-        const altMatch = clientHtmlContent.match(/Date:.*?(\w+\s+\d+,\s+\d{4})/);
-        if (altMatch) {
-          console.log('Date found (alternative pattern):', altMatch[1]);
-        }
-      }
-      // Log a snippet of HTML around the date
-      const dateIndex = clientHtmlContent.indexOf('Date:');
-      if (dateIndex !== -1) {
-        const snippet = clientHtmlContent.substring(Math.max(0, dateIndex - 50), Math.min(clientHtmlContent.length, dateIndex + 200));
-        console.log('HTML snippet around Date:', snippet);
-      }
-      console.log('===================================');
+      const clientHtmlContent = renderDocumentEmail({
+        kind: 'estimate',
+        audience: 'client',
+        moment: 'sent',
+        companyName,
+        greetingName: clientFirst,
+        clientFirstName: clientFirst,
+        documentNumber,
+        dateLabel,
+        serviceType,
+        contact: clientContact,
+        pdfUrl,
+        acceptUrl,
+        trackingPixelUrl,
+        isUpdate,
+      });
+      const ownerHtmlContent = renderDocumentEmail({
+        kind: 'estimate',
+        audience: 'owner',
+        moment: 'sent',
+        companyName,
+        greetingName: personFirstName(ownerName),
+        clientFirstName: clientFirst,
+        documentNumber,
+        dateLabel,
+        serviceType,
+        contact: ownerContact,
+        pdfUrl,
+        acceptUrl: null,
+        isUpdate,
+      });
 
       // Send email to client
       console.log(`Sending email to client: ${recipientEmail}`);

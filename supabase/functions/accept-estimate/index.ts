@@ -1,6 +1,15 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import * as Sentry from "npm:@sentry/deno";
+import { resolveDocumentPdfUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
+import {
+  documentCode,
+  formatPhoneDisplay,
+  formatStreetAddress,
+  personFirstName,
+  renderDocumentEmail,
+} from "../_shared/documentEmailCard.ts";
+import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -94,42 +103,6 @@ async function sendEmailViaSMTP(
   }
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function generateOwnerAcceptedEmailHtml(
-  estimateNumber: string,
-  clientName: string,
-  total: number,
-  companyName: string,
-): string {
-  const amount = (Number(total) || 0).toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-  return `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><title>Estimate Accepted</title></head>
-<body style="font-family:Segoe UI,Tahoma,sans-serif;background:#f3f4f6;padding:24px;">
-  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;padding:32px;">
-    <h1 style="color:#1e3a8a;font-size:22px;margin:0 0 16px;">Estimate accepted</h1>
-    <p style="color:#374151;line-height:1.6;">
-      <strong>${escapeHtml(clientName)}</strong> accepted estimate
-      <strong>${escapeHtml(estimateNumber)}</strong> for
-      <strong>$${amount}</strong>.
-    </p>
-    <p style="color:#6b7280;font-size:14px;">Open Thunder Pro to view the estimate and schedule next steps.</p>
-    <p style="color:#9ca3af;font-size:12px;margin-top:24px;">${escapeHtml(companyName)}</p>
-  </div>
-</body>
-</html>`;
-}
-
 async function notifyOwnerOfEstimateAccepted(
   supabase: SupabaseClient,
   estimate: Record<string, unknown>,
@@ -149,12 +122,64 @@ async function notifyOwnerOfEstimateAccepted(
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("company_name, company_email")
+    .select("first_name, last_name, company_name, company_email, company_phone, company_address, company_apt_suite, company_city, company_state, company_zip, timezone")
     .eq("user_id", userId)
     .maybeSingle();
 
-  const companyName = profile?.company_name || "Thunder Pro";
+  const companyName = profile?.company_name || String(estimate.company_name || "Thunder Pro");
   const ownerEmail = (profile?.company_email || "").trim();
+  const ownerName = [profile?.first_name, profile?.last_name].filter(Boolean).join(" ").trim();
+  const clientEmail = String(estimate.email || "").trim();
+  const pdfUrl = resolveDocumentPdfUrl(String(estimate.public_share_token || estimateId));
+  const dateLabel = formatDateOnlyLong(String(estimate.estimate_date || ""), profile?.timezone || undefined);
+  const serviceType = String(estimate.service_type || "Residential");
+  const cardNumber = documentCode(estimateId);
+  const clientFirst = personFirstName(clientName);
+  const shared = {
+    kind: "estimate" as const,
+    moment: "accepted" as const,
+    companyName,
+    clientFirstName: clientFirst,
+    documentNumber: cardNumber,
+    dateLabel,
+    serviceType,
+    pdfUrl,
+    acceptUrl: null,
+  };
+  const clientHtml = renderDocumentEmail({
+    ...shared,
+    audience: "client",
+    greetingName: clientFirst,
+    contact: {
+      name: clientName,
+      email: clientEmail,
+      phone: formatPhoneDisplay(String(estimate.phone || "")),
+      address: formatStreetAddress([
+        String(estimate.address || ""),
+        String(estimate.apt || ""),
+        String(estimate.city || ""),
+        String(estimate.state || ""),
+        String(estimate.zip || ""),
+      ]),
+    },
+  });
+  const ownerHtml = renderDocumentEmail({
+    ...shared,
+    audience: "owner",
+    greetingName: personFirstName(ownerName),
+    contact: {
+      name: ownerName || companyName,
+      email: ownerEmail,
+      phone: formatPhoneDisplay(profile?.company_phone),
+      address: formatStreetAddress([
+        profile?.company_address,
+        profile?.company_apt_suite,
+        profile?.company_city,
+        profile?.company_state,
+        profile?.company_zip,
+      ]),
+    },
+  });
 
   try {
     await supabase.from("notifications").insert({
@@ -174,21 +199,20 @@ async function notifyOwnerOfEstimateAccepted(
 
   if (!ownerEmail) {
     console.warn("accept-estimate: no company_email on profile, skipping owner email");
-    return;
   }
 
   try {
-    const subject = `Estimate accepted — ${estimateNumber}`;
-    const html = generateOwnerAcceptedEmailHtml(
-      estimateNumber,
-      clientName,
-      total,
-      companyName,
-    );
-    await sendEmailViaSMTP(ownerEmail, subject, html);
-    console.log("accept-estimate: owner email sent to", ownerEmail);
+    if (clientEmail) {
+      await sendEmailViaSMTP(clientEmail, `Estimate accepted - ${companyName}`, clientHtml);
+      console.log("accept-estimate: client email sent to", clientEmail);
+    }
+    if (ownerEmail && ownerEmail !== clientEmail) {
+      if (clientEmail) await new Promise((resolve) => setTimeout(resolve, 3000));
+      await sendEmailViaSMTP(ownerEmail, `Estimate accepted — ${estimateNumber}`, ownerHtml);
+      console.log("accept-estimate: owner email sent to", ownerEmail);
+    }
   } catch (emailErr) {
-    console.error("accept-estimate: owner email failed:", emailErr);
+    console.error("accept-estimate: acceptance email failed:", emailErr);
     Sentry.captureException(emailErr);
   }
 }

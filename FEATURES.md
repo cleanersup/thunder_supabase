@@ -1,0 +1,291 @@
+# Thunder Supabase — features
+
+The shared server for every Thunder Pro app. It holds the database, the access rules, and the functions that send email, text messages, PDFs, and payments.
+
+Apps do not each keep their own copy of a client or an invoice. They read and write these tables. A function runs with server privileges when the phone or the browser must not see a secret (Stripe, Twilio, the PDF lookup).
+
+Nothing here is a screen. If a task is "move a button", it belongs in an app. If a task is "the customer opened the link and should see the PDF", it belongs here.
+
+## Accounts and company
+
+Owners sign up with email. The profile stores the company name, logo, address, phone, email, and the one country they serve. Triggers fill the country on new addresses. The owner cannot switch country later by editing the profile.
+
+Employees do not get an owner account. They prove their phone with a one-time text code.
+
+Customers of the cleaning company can get a magic link into the client portal.
+
+## Requests
+
+`create-booking` saves a public request and emails the visitor. A second confirmation email must not be sent from the app on that same submit. `send-booking-emails` is for other sends, such as a manual resend. The owner is also notified in the app.
+
+## Estimates and quick quotes
+
+| Function | What it does |
+|---|---|
+| `send-estimate-email` | Emails the customer and the owner. View opens the PDF. Accept is a separate button. |
+| `send-estimate-sms` | Texts the link the app already built |
+| `send-quick-quote-email` | Same idea for a quote. View opens the PDF. |
+| `send-quick-quote-sms` | Builds the quote link on the server and texts it |
+| `accept-estimate` / `accept-quick-quote` | Records that the customer accepted |
+| `download-estimate-pdf` | Builds the estimate or quote sheet and shows it in the browser |
+| `mark-viewed` | Records that the email was opened |
+
+The sheet uses the company profile and the estimate or quote: rooms or services, prices, discount, deposit, and balance. The footer is Thunder Pro.
+
+## Invoices and payments
+
+| Function | What it does |
+|---|---|
+| `send-invoice-email` | Emails the invoice. Pay opens checkout. Download shows the PDF. A paid invoice can instead send a receipt. |
+| `send-invoice-sms` | Texts a link that opens the PDF |
+| `send-invoice-reminders` | Reminds the customer to pay. That link stays the payment page. |
+| `download-invoice-pdf` | Builds the invoice sheet (number, dates, title, tax, notes) and shows it in the browser |
+| `stripe-create-checkout` | Starts card payment for a public invoice |
+| `stripe-webhook` | Marks the invoice paid when Stripe confirms it |
+| `process-invoice-payment` | Server-side payment completion |
+| `stripe-onboard`, `stripe-check-account`, `stripe-dashboard-link` | Connects the owner's Stripe account so they can get paid |
+
+The Pay button and the PDF button are different. Pay must keep going to checkout.
+
+## Jobs
+
+Functions email or text the customer when a job's status changes, when an estimate becomes a job, and when a job is due. Assigned employees can be notified. The database also creates the next visit in a repeating series and can cancel the series.
+
+## Schedule
+
+Appointment functions email and text the customer, including day-before reminders and a scheduled batch.
+
+## Walkthroughs
+
+Functions confirm, update, cancel, complete, and remind. Each has an email version and, where needed, a text version. Converting a walkthrough can notify the people involved.
+
+## Contracts
+
+`send-contract-email` and `send-contract-sms` deliver the agreement. `download-contract-pdf` returns the file. `accept-contract` records the signature. A scheduled function expires contracts that ran out.
+
+## Employees and time clock
+
+| Function | What it does |
+|---|---|
+| `validate-employee-phone` | Checks that the phone belongs to an active employee |
+| `send-employee-otp` / `verify-employee-otp` | Sends and checks the login code |
+| `resend-employee-invite`, `send-employee-welcome-email` | Invite and welcome |
+| `get-scheduled-shifts` | Today's assigned work for the employee app |
+| `employee-clock-action` | Clock in, break, and clock out. The server writes the timestamps and the hours. |
+| `get-active-clock-session` | The shift that is open right now |
+| `get-employee-time-history` | Past shifts |
+| `upload-shift-photo` | Before and after photos |
+| `send-clock-notifications` | Tells the owner about clock activity |
+| `send-timesheet-email`, `send-timesheet-sms` | Sends a timesheet |
+
+The clock function still identifies work by the route appointment. The employee app hides that and talks about jobs.
+
+## Client portal
+
+`validate-client-portal-magic-link` signs the customer in. Wallet functions list saved cards, start a card-setup checkout, and issue a token for the wallet page.
+
+## Other mail and safety
+
+Verification email, password reset, and the signup welcome. `handle-email-bounce` records a bad address. `verify-recaptcha` protects public forms. `geocode-address` turns a street address into coordinates and rejects a point outside the owner's country. Push functions register a device and send a notification.
+
+## Plans
+
+`revenuecat-webhook` and `update-subscription` record the store subscription. The apps decide which buttons to lock. The database is not what hides a menu.
+
+## Email and SMS
+
+Every email and text is sent from a function in this repo. The dashboard and the phone app only call that function. To change a subject, a sentence, or a link, edit the function in the table and deploy it.
+
+The same list is copied into `thunder_dashboard/FEATURES.md` and `swift-slate/FEATURES.md` so an agent working in those apps can see it. If a line here and a line there disagree, the function code wins.
+
+### Account
+
+| When | To | Channel | Subject or text | Function |
+|---|---|---|---|---|
+| Owner signs up | Owner | Email | Verify Your Thunder Pro Email Address | `send-verification-email` |
+| Owner signs up | Owner | Email | Welcome to Thunder Pro — schedule your demo | `send-signup-welcome` |
+| Owner signs up | Owner | SMS | Hi {name}, this is Javier from Thunder Pro, with a Calendly demo link | `send-signup-welcome` |
+| A profile row is created | Thunder Pro internal inbox | Email | New Thunder Pro user registration | `notify-internal-registration` |
+| Owner asks to reset a password | Owner | Email | Reset Your Thunder Pro Password | `send-password-reset-email` |
+
+### Requests
+
+`create-booking` calls `send-booking-status-emails` after the row is saved. The app must not send a second confirmation on that same submit.
+
+| When | To | Channel | Subject or text | Function |
+|---|---|---|---|---|
+| Request is created | Visitor | Email | Request Confirmation - {company} | `send-booking-status-emails` |
+| Request is created | Owner | Email | 🎉 New Request - {name} | `send-booking-status-emails` |
+| Request is converted | Visitor | Email | Update — your request with {company} | `send-booking-status-emails` |
+| Request is converted | Owner | Email | Request converted — {name} | `send-booking-status-emails` |
+| Request is cancelled | Visitor / owner | Email | Request cancelled — {company} / Request cancelled — {name} | `send-booking-status-emails` |
+| Request is archived | Visitor / owner | Email | Request archived — {company} / Request archived — {name} | `send-booking-status-emails` |
+| Request is restored | Visitor / owner | Email | Request restored — {company} / Request restored — {name} | `send-booking-status-emails` |
+| Another status change | Visitor / owner | Email | Request update — {company} / Request status {status} — {name} | `send-booking-status-emails` |
+| Older booking mail, including a manual resend | Visitor | Email | Booking Confirmation - {company} | `send-booking-emails` |
+| Older booking mail | Owner | Email | 🎉 New Lead Request - {name} requesting {service} | `send-booking-emails` |
+
+### Estimates
+
+The owner sends these from the estimate screen. View opens `download-estimate-pdf`. Accept calls `accept-estimate`.
+
+| When | To | Channel | Subject or text | Function |
+|---|---|---|---|---|
+| First residential send | Customer | Email | Residential Cleaning Estimate - {company} | `send-estimate-email` |
+| First commercial send | Customer | Email | Commercial Cleaning Estimate - {company} | `send-estimate-email` |
+| Update | Customer | Email | You have an Updated estimate - {company} | `send-estimate-email` |
+| First send or update | Owner | Email | An estimate was sent to {client} / An estimate was updated for {client} | `send-estimate-email` |
+| First text | Customer | SMS | Hi {name}, your cleaning estimate{total} is ready. View it here: {pdf url} | `send-estimate-sms` |
+| Updated text | Customer | SMS | Hi {name}, your cleaning estimate{total} has been updated. View it here: {pdf url} | `send-estimate-sms` |
+| Customer accepts | Owner | Email | Estimate accepted — {number} | `accept-estimate` |
+
+Estimate SMS pastes the URL the app already built. The email builds its own PDF link.
+
+### Quick quotes
+
+| When | To | Channel | Subject or text | Function |
+|---|---|---|---|---|
+| First send | Recipient | Email | Cleaning Quote - {company} | `send-quick-quote-email` |
+| Update | Recipient | Email | You have an Updated quote - {company} | `send-quick-quote-email` |
+| First send or update | Owner | Email | A quote was sent to {name} / A quote was updated for {name} | `send-quick-quote-email` |
+| Text | Recipient | SMS | Hi {name}, your cleaning estimate{total} is ready. View it here: {pdf url} | `send-quick-quote-sms` |
+| Updated text | Recipient | SMS | Hi {name}, your cleaning estimate{total} has been updated. View it here: {pdf url} | `send-quick-quote-sms` |
+| Recipient accepts | Owner | Email | Quote accepted — {number} | `accept-quick-quote` |
+
+The quote text still says "cleaning estimate". The email subject says Quote. The link is `download-estimate-pdf`. The server ignores a URL sent by the app.
+
+### Invoices
+
+| When | To | Channel | Subject or text | Function |
+|---|---|---|---|---|
+| Owner sends the invoice | Customer | Email | {company} sent you an invoice | `send-invoice-email` |
+| Owner sends an update | Customer | Email | You have an Updated invoice - {company} | `send-invoice-email` |
+| Those sends | Owner | Email | Invoice sent to {client} / Invoice updated for {client} | `send-invoice-email` |
+| Owner texts the invoice | Customer | SMS | Hi {name}, your invoice{total} is ready. View it here: {pdf url} | `send-invoice-sms` |
+| Owner texts an update | Customer | SMS | Hi {name}, your invoice{total} has updates and is ready. View it here: {pdf url} | `send-invoice-sms` |
+| Invoice is paid (Stripe checkout, saved card, or `process-invoice-payment`) | Customer | Email | Payment received — Invoice {number} | `send-invoice-email` with `isPaymentConfirmation` |
+| Invoice is paid | Owner | Email | Invoice paid: {number} — {client} | `send-invoice-email` with `isPaymentConfirmation` |
+| Due today, once a day at 9:00 UTC, or the owner taps Remind | Customer | Email | {company} sent you a invoice reminder | `send-invoice-reminders` |
+| That reminder | Owner | Email | A reminder invoice was sent to {client} | `send-invoice-reminders` |
+
+The invoice email has Pay (`/invoice/payment/:token`) and Download PDF (`download-invoice-pdf`). The text opens the PDF. The reminder email keeps Pay Now on the payment page. There is no invoice reminder SMS.
+
+### Jobs
+
+| When | To | Channel | Subject or text | Function |
+|---|---|---|---|---|
+| Status becomes upcoming, first time | Customer | Email | Your job has been confirmed — {company} | `send-job-status-emails` |
+| Status becomes upcoming again | Customer | Email | Your job has been rescheduled — {company} | `send-job-status-emails` |
+| Completed | Customer | Email | Your job has been completed — {company}. May include View invoice and pay | `send-job-status-emails` |
+| Cancelled | Customer | Email | Your job has been cancelled — {company} | `send-job-status-emails` |
+| Any status change | Owner | Email | Job {number} status {status} — {company}, or Job {number} completed | `send-job-status-emails` |
+| Assigned, or cancelled | Employee | Email | Job assigned — {number} / Job cancelled — {number} | `send-job-status-emails` |
+| Confirmed | Customer | SMS | {company}: Hi {name}, your job is confirmed for {date}. Address: {address} | `send-job-status-sms` |
+| Rescheduled | Customer | SMS | {company}: Hi {name}, your job has been rescheduled to {date}. Address: {address} | `send-job-status-sms` |
+| Completed | Customer | SMS | {company}: Hi {name}, your job has been completed. Thank you! Payment link when an invoice exists | `send-job-status-sms` |
+| Cancelled | Customer | SMS | {company}: Hi {name}, your job scheduled for {date} has been cancelled. | `send-job-status-sms` |
+| Estimate or walkthrough becomes a job | Owner | Email | Job created from {source} — {number} | `send-job-conversion-emails` |
+| That conversion | Customer | Email | Your {source} was moved to a job with {company} | `send-job-conversion-emails` |
+| Day before and day of, 9:00 UTC | Customer | Email | Recordatorio: tu trabajo es mañana/hoy — {company} | `send-job-reminders` |
+| Day before and day of, 9:00 UTC | Employee | Email | Recordatorio de trabajo — mañana/hoy — {number} | `send-job-reminders` |
+| Assigned, rescheduled, or cancelled | Employee | Email | Job assigned / Job rescheduled / Job cancelled — {number} | `notify-job-employees` |
+| Those events, if push is unavailable | Employee | SMS | {company}: You've been assigned {job} / rescheduled / cancelled | `notify-job-employees` |
+
+Job reminder subjects are in Spanish. Other job mail is in English.
+
+### Schedule
+
+| When | To | Channel | Subject or text | Function |
+|---|---|---|---|---|
+| Owner saves or updates an appointment | Owner | Email | New Service Appointment - {client} / Service Appointment Updated - {client} | `send-appointment-emails` |
+| Same | Customer | Email | Service Appointment Confirmation - {date} / Service Appointment Updated - {date} | `send-appointment-emails` |
+| Same | Employee | Email | New Service Assignment - {date} / Service Assignment Updated - {date} | `send-appointment-emails` |
+| Same | Customer | SMS | Update from {company}: Your job scheduled for {date} has been assigned and is on route… / has been updated. Link is the appointment PDF | `send-appointment-sms` |
+| Same | Employee | SMS | New job assigned for {date}! / Job updated for {date}! Plus client, address, service, and the employee app link | `send-appointment-sms` |
+| Every day at 8:00 UTC, for today's appointments | Customer | Email | Service Appointment Confirmation - {date} | `send-scheduled-appointment-emails` |
+| When the reminder function runs, 24 hours before | Owner | Email | 24-Hour Reminder - Service Tomorrow | `send-appointment-reminders` |
+| 24 hours before | Customer | Email | Reminder: Your Service is Tomorrow | `send-appointment-reminders` |
+| 24 hours before | Employee | Email | Service Reminder - Tomorrow | `send-appointment-reminders` |
+| 1 hour before | Owner | Email | Service Starting Soon - 1 Hour | `send-appointment-reminders` |
+| 1 hour before | Customer | Email | We're On Our Way! | `send-appointment-reminders` |
+
+### Walkthroughs
+
+| When | To | Channel | Subject or text | Function |
+|---|---|---|---|---|
+| Scheduled | Owner and customer | Email | Walkthrough confirmed | `send-walkthrough-confirmation` |
+| Scheduled | Customer | SMS | A New walkthrough is scheduled with {employee} on {date} at {time} | `send-walkthrough-confirmation-sms` |
+| Rescheduled | Owner and customer | Email | Walkthrough Appointment Updated | `send-walkthrough-update` |
+| Rescheduled | Customer | SMS | Update from {company}: Your walkthrough appointment has been rescheduled to {date} at {time} | `send-walkthrough-update-sms` |
+| Started | Owner and customer | Email | Good news, the walkthrough has started !! | `send-walkthrough-start` |
+| Started | Customer | SMS | Good news! The walkthrough with {employee} has started on {date} at {time} | `send-walkthrough-start-sms` |
+| Completed | Owner | Email | Congratulations! Walkthrough Completed | `send-walkthrough-completion` |
+| Completed | Customer | Email | Your Estimate is Being Prepared | `send-walkthrough-completion` |
+| Completed | Customer | SMS | Thank you! Your walkthrough with {company} has been completed… | `send-walkthrough-completion-sms` |
+| Cancelled | Owner and customer | Email | Walkthrough Successfully Cancelled | `send-walkthrough-cancellation` |
+| Cancelled | Customer | SMS | We're sorry, but your walkthrough appointment with {company} has been cancelled… | `send-walkthrough-cancellation-sms` |
+| Converted to an estimate | Owner | Email | Walkthrough converted — estimate linked | `send-walkthrough-converted` |
+| Converted | Customer | Email | Your estimate is on the way | `send-walkthrough-converted` |
+| Day before, 9:00 UTC | Owner and customer | Email | Walkthrough reminder - Tomorrow | `send-walkthrough-day-before-reminders` |
+| Day before | Owner | SMS | Reminder: Walkthrough with {name} scheduled for tomorrow ({date}) at {time} | `send-walkthrough-day-before-reminders` |
+| Day before | Customer | SMS | A New walkthrough is schedule with {employee} on {date} at {time} | `send-walkthrough-day-before-reminders` |
+| About 1 hour before (checked every 5 minutes) | Owner and customer | Email | The walkthrough starts in 1 hour. | `send-walkthrough-reminders` |
+
+`send-walkthrough-status-emails` is the switch: it calls the confirmation, completion, cancellation, or converted function for that status.
+
+### Contracts
+
+| When | To | Channel | Subject or text | Function |
+|---|---|---|---|---|
+| Owner sends the agreement | Customer | Email | Service Agreement - {company} | `send-contract-email` |
+| Owner texts it | Customer | SMS | Hi {name}, your service agreement{total} is ready. View and download here: {url} | `send-contract-sms` |
+| Owner texts an update | Customer | SMS | Hi {name}, your service agreement{total} has been updated. View and download here: {url} | `send-contract-sms` |
+| Customer accepts | Owner | Email | Contract accepted — {number} | `accept-contract` |
+| One month before the end date, daily at 9:00 UTC | Owner | Email | Contract {number} expires in one month ({date}) | `process-contract-expirations` |
+
+### Employees and time clock
+
+| When | To | Channel | Subject or text | Function |
+|---|---|---|---|---|
+| Employee asks for a login code | Employee | SMS | Your verification code is: {code}. This code will expire in 10 minutes. | `send-employee-otp` |
+| Owner invites or resends | Employee | SMS | Hi {name}! Welcome to the {company} team. Download the Thunder Pro employee app… | `send-employee-sms` |
+| Owner invites or resends | Employee | Email | Welcome to the {company} team | `send-employee-welcome-email` |
+| A timesheet is sent | Employee | Email | Your Timesheet - {dates} | `send-timesheet-email` |
+| A timesheet is texted | Employee | SMS | Hi {name}, your timesheet is ready. View it here: {pdf url} | `send-timesheet-sms` |
+| Clock in on an assigned service | Owner | Email | Service Started | `send-clock-notifications` |
+| Clock in on an assigned service | Customer | Email | Your Service Has Started | `send-clock-notifications` |
+| Clock out on an assigned service | Owner | Email | Service Completed | `send-clock-notifications` |
+| Clock out on an assigned service | Customer | Email | Service Completed - Thank You! | `send-clock-notifications` |
+| Clock in with no service | Owner | Email | Employee Clock In - {name} | `send-clock-notifications` |
+| Clock out with no service | Owner | Email | Employee Clock Out - {name} | `send-clock-notifications` |
+
+`employee-clock-action` calls `send-clock-notifications`. `resend-employee-invitation` calls the welcome SMS and the welcome email.
+
+### Client portal
+
+| When | To | Channel | Subject or text | Function |
+|---|---|---|---|---|
+| Customer asks for a login link | Customer | Email | Your Thunder Pro client portal link | `request-client-portal-magic-link` |
+
+The page always answers that a registered email will receive a link. There is no portal SMS.
+
+### Daily sales
+
+| When | To | Channel | Subject or text | Function |
+|---|---|---|---|---|
+| The report function runs and there are paid invoices that day | Owner | Email | {company} —Your Daily Sales Summary Report | `send-daily-sales-report` |
+
+### Samples
+
+`send-sample-emails`, `send-payment-sample-emails`, `send-sample-walkthrough-emails`, `send-start-walkthrough-samples`, `send-completion-walkthrough-samples`, and `send-cancellation-samples` send preview copies to a test address. They are not a customer flow.
+
+## How a customer link is chosen
+
+| They should | Host |
+|---|---|
+| See an estimate or quote PDF | This server, `download-estimate-pdf` |
+| See an invoice PDF | This server, `download-invoice-pdf` |
+| Pay an invoice | `dashboard.thunderpro.co/invoice/payment/...` |
+| Read marketing pages | `thunderpro.co` |
+
+A PDF that should appear on screen is returned inline. A file marked as a download attachment makes the phone save it instead of showing it.

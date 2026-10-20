@@ -7,6 +7,15 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import * as Sentry from "npm:@sentry/deno";
+import { resolveDocumentPdfUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
+import {
+  documentCode,
+  formatPhoneDisplay,
+  formatStreetAddress,
+  personFirstName,
+  renderDocumentEmail,
+} from "../_shared/documentEmailCard.ts";
+import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -102,42 +111,6 @@ async function sendEmailViaSMTP(
   }
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function generateOwnerAcceptedEmailHtml(
-  quoteNumber: string,
-  recipientName: string,
-  total: number,
-  companyName: string,
-): string {
-  const amount = (Number(total) || 0).toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-  return `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><title>Quote Accepted</title></head>
-<body style="font-family:Segoe UI,Tahoma,sans-serif;background:#f3f4f6;padding:24px;">
-  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;padding:32px;">
-    <h1 style="color:#1e3a8a;font-size:22px;margin:0 0 16px;">Quote accepted</h1>
-    <p style="color:#374151;line-height:1.6;">
-      <strong>${escapeHtml(recipientName)}</strong> accepted quote
-      <strong>${escapeHtml(quoteNumber)}</strong> for
-      <strong>$${amount}</strong>.
-    </p>
-    <p style="color:#6b7280;font-size:14px;">Open Thunder Pro to view the quote and convert it to a job.</p>
-    <p style="color:#9ca3af;font-size:12px;margin-top:24px;">${escapeHtml(companyName)}</p>
-  </div>
-</body>
-</html>`;
-}
-
 async function notifyOwnerOfQuoteAccepted(
   supabase: SupabaseClient,
   quote: Record<string, unknown>,
@@ -155,12 +128,58 @@ async function notifyOwnerOfQuoteAccepted(
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("company_name, company_email")
+    .select("first_name, last_name, company_name, company_email, company_phone, company_address, company_apt_suite, company_city, company_state, company_zip, timezone")
     .eq("user_id", userId)
     .maybeSingle();
 
   const companyName = profile?.company_name || "Thunder Pro";
   const ownerEmail = (profile?.company_email || "").trim();
+  const ownerName = [profile?.first_name, profile?.last_name].filter(Boolean).join(" ").trim();
+  const clientEmail = String(quote.recipient_email || "").trim();
+  const pdfUrl = resolveDocumentPdfUrl(String(quote.public_share_token || quoteId));
+  const dateLabel = formatDateOnlyLong(String(quote.quote_date || ""), profile?.timezone || undefined);
+  const serviceType = String(quote.service_type || "Quote");
+  const cardNumber = documentCode(quoteId);
+  const clientFirst = personFirstName(recipientName);
+  const shared = {
+    kind: "quote" as const,
+    moment: "accepted" as const,
+    companyName,
+    clientFirstName: clientFirst,
+    documentNumber: cardNumber,
+    dateLabel,
+    serviceType,
+    pdfUrl,
+    acceptUrl: null,
+  };
+  const clientHtml = renderDocumentEmail({
+    ...shared,
+    audience: "client",
+    greetingName: clientFirst,
+    contact: {
+      name: recipientName,
+      email: clientEmail,
+      phone: formatPhoneDisplay(String(quote.recipient_phone || "")),
+      address: "",
+    },
+  });
+  const ownerHtml = renderDocumentEmail({
+    ...shared,
+    audience: "owner",
+    greetingName: personFirstName(ownerName),
+    contact: {
+      name: ownerName || companyName,
+      email: ownerEmail,
+      phone: formatPhoneDisplay(profile?.company_phone),
+      address: formatStreetAddress([
+        profile?.company_address,
+        profile?.company_apt_suite,
+        profile?.company_city,
+        profile?.company_state,
+        profile?.company_zip,
+      ]),
+    },
+  });
 
   try {
     await supabase.from("notifications").insert({
@@ -179,15 +198,16 @@ async function notifyOwnerOfQuoteAccepted(
 
   if (!ownerEmail) {
     console.warn("accept-quick-quote: no company_email, skipping owner email");
-    return;
   }
 
   try {
-    await sendEmailViaSMTP(
-      ownerEmail,
-      `Quote accepted — ${quoteNumber}`,
-      generateOwnerAcceptedEmailHtml(quoteNumber, recipientName, total, companyName),
-    );
+    if (clientEmail) {
+      await sendEmailViaSMTP(clientEmail, `Quote accepted - ${companyName}`, clientHtml);
+    }
+    if (ownerEmail && ownerEmail !== clientEmail) {
+      if (clientEmail) await new Promise((resolve) => setTimeout(resolve, 3000));
+      await sendEmailViaSMTP(ownerEmail, `Quote accepted — ${quoteNumber}`, ownerHtml);
+    }
   } catch (emailErr) {
     console.error("accept-quick-quote: owner email failed:", emailErr);
     Sentry.captureException(emailErr);
