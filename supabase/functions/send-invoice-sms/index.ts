@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import * as Sentry from "npm:@sentry/deno";
+import { resolveInvoicePdfUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -18,6 +19,19 @@ interface InvoiceSMSRequest {
   invoiceUrl: string;
   invoiceTotal?: number;
   isUpdate?: boolean;
+}
+
+function tokenFromInvoiceUrl(invoiceUrl: string): string {
+  try {
+    const url = new URL(invoiceUrl);
+    const query = url.searchParams.get("token") || url.searchParams.get("id");
+    if (query) return query;
+    const parts = url.pathname.split("/").filter(Boolean);
+    return decodeURIComponent(parts[parts.length - 1] || "");
+  } catch {
+    const parts = invoiceUrl.split("/").filter(Boolean);
+    return decodeURIComponent(parts[parts.length - 1] || "");
+  }
 }
 
 // Normalize phone number: add +1 prefix if not present
@@ -71,12 +85,13 @@ serve(async (req) => {
       const normalizedPhone = normalizePhoneNumber(phoneNumber);
       console.log("Phone number normalized:", phoneNumber, "->", normalizedPhone);
 
+      const pdfUrl = resolveInvoicePdfUrl(tokenFromInvoiceUrl(invoiceUrl)) || invoiceUrl;
+      console.log("invoice url", pdfUrl);
       const totalText = invoiceTotal ? ` for $${invoiceTotal.toFixed(2)}` : '';
-      let message = `Hi ${clientName}, your invoice${totalText} is ready. View and pay here: ${invoiceUrl}`;
+      let message = `Hi ${clientName}, your invoice${totalText} is ready. View it here: ${pdfUrl}`;
 
-      // Add extra text when invoice is updated
       if (isUpdate) {
-        message = `Hi ${clientName}, your invoice${totalText} has updates and is ready. View and pay here: ${invoiceUrl}.`;
+        message = `Hi ${clientName}, your invoice${totalText} has updates and is ready. View it here: ${pdfUrl}`;
       }
 
       console.log("=== PREPARING SMS MESSAGE ===");

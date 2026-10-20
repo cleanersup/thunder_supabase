@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveDocumentPdfUrl, resolveEstimateViewUrl, resolveQuickQuoteHost, resolveQuickQuoteViewUrl } from "./resolveQuickQuoteViewUrl.ts";
+import { resolveDocumentPdfUrl, resolveEstimateViewUrl, resolveInvoicePdfUrl, resolveQuickQuoteHost, resolveQuickQuoteViewUrl } from "./resolveQuickQuoteViewUrl.ts";
 
 test("View Quote host is staging.thunderpro.co when ENVIRONMENT is staging", () => {
   assert.equal(resolveQuickQuoteHost("staging", "http://kong:8000"), "https://staging.thunderpro.co");
@@ -43,6 +43,13 @@ test("SMS and email open the PDF inline from the public functions host", () => {
     "https://portal.thunderpro.co/functions/v1/download-estimate-pdf?token=abc123token",
   );
   assert.equal(resolveDocumentPdfUrl("  "), null);
+});
+
+test("invoice SMS and email open the invoice PDF", () => {
+  assert.equal(
+    resolveInvoicePdfUrl("paytoken"),
+    "https://portal.thunderpro.co/functions/v1/download-invoice-pdf?token=paytoken",
+  );
 });
 
 test("View Quote URL uses /public/quick-quote/ on the hardcoded host", () => {

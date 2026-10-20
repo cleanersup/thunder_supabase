@@ -99,3 +99,10 @@ export function resolveDocumentPdfUrl(token: string | null | undefined): string 
   if (!slug) return null;
   return `${resolvePublicFunctionsHost()}/functions/v1/download-estimate-pdf?token=${encodeURIComponent(slug)}`;
 }
+
+/** Invoice PDF opened from the email button and the SMS link. */
+export function resolveInvoicePdfUrl(token: string | null | undefined): string | null {
+  const slug = token?.trim();
+  if (!slug) return null;
+  return `${resolvePublicFunctionsHost()}/functions/v1/download-invoice-pdf?token=${encodeURIComponent(slug)}`;
+}
