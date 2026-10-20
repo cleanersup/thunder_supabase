@@ -37,7 +37,9 @@ test("client send estimate uses the card and hides the reference title", () => {
   assert.doesNotMatch(html, /CONFIRMATION FOR CLIENT/);
   assert.match(html, /Hello Pedro,/);
   assert.match(html, /Clean Up Company has sent you an estimate/);
-  assert.match(html, /Estimate Number :<\/span> A1B2C3D4/);
+  assert.match(html, /<span style="font-weight:700;">Estimate Number :<\/span> A1B2C3D4/);
+  assert.match(html, /<span style="font-weight:700;">Name :<\/span> Pedro Cisneros/);
+  assert.match(html, /<span style="font-weight:700;">Address :<\/span> 818 W Huntington Dr/);
   assert.match(html, /Service Type :<\/span> Residential/);
   assert.match(html, /Pedro Cisneros/);
   assert.match(html, />Accept Estimate</);

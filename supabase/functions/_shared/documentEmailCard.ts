@@ -124,7 +124,7 @@ function bodyCopy(input: DocumentEmailInput): string {
 function detailLine(label: string, value: string): string {
   const shown = value.trim();
   if (!shown) return "";
-  return `<p style="margin:0 0 6px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.4;font-weight:700;color:#111111;"><span>${escapeHtml(label)} :</span> ${escapeHtml(shown)}</p>`;
+  return `<p style="margin:0 0 6px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.4;font-weight:400;color:#111111;"><span style="font-weight:700;">${escapeHtml(label)} :</span> ${escapeHtml(shown)}</p>`;
 }
 
 function button(href: string, label: string, background: string): string {
