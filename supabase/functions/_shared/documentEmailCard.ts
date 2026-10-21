@@ -34,8 +34,8 @@ export interface DocumentEmailInput {
   isUpdate?: boolean;
 }
 
-const NAVY = "#1e3a8a";
-const GREEN = "#239445";
+export const EMAIL_NAVY = "#1e3a8a";
+export const EMAIL_GREEN = "#239445";
 const PAGE = "#e6e6e6";
 
 export function escapeHtml(value: string): string {
@@ -121,40 +121,24 @@ function bodyCopy(input: DocumentEmailInput): string {
   return `${company} has sent you an ${updated}${word} for your requested services. Please download the attached PDF to review the details, or click the ${acceptLabel()} button below to review and accept the ${word} online.`;
 }
 
-function detailLine(label: string, value: string): string {
+export function emailDetailLine(label: string, value: string): string {
   const shown = value.trim();
   if (!shown) return "";
   return `<p style="margin:0 0 6px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.4;font-weight:400;color:#111111;"><span style="font-weight:700;">${escapeHtml(label)} :</span> ${escapeHtml(shown)}</p>`;
 }
 
-function button(href: string, label: string, background: string): string {
+export function emailActionButton(href: string, label: string, background: string): string {
   return `<a href="${escapeHtml(href)}" style="display:inline-block;background-color:${background};color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:700;line-height:1;text-decoration:none;padding:14px 22px;border-radius:4px;margin:6px;">${escapeHtml(label)}</a>`;
 }
 
-export function renderDocumentEmail(input: DocumentEmailInput): string {
-  const hello = input.greetingName.trim() || "there";
-  const lines = [
-    detailLine(numberLabel(), input.documentNumber),
-    detailLine("Date", input.dateLabel),
-    detailLine("Service Type", input.serviceType),
-    `<p style="margin:0 0 14px 0;font-size:8px;line-height:8px;">&nbsp;</p>`,
-    detailLine("Name", input.contact.name),
-    detailLine("Email", input.contact.email),
-    detailLine("Phone", input.contact.phone),
-    detailLine("Address", input.contact.address),
-  ].join("");
-
-  const actions: string[] = [];
-  if (input.moment === "sent" && input.audience === "client" && input.acceptUrl) {
-    actions.push(button(input.acceptUrl, acceptLabel(), GREEN));
-  }
-  if (input.pdfUrl) {
-    const label = input.moment === "sent" && input.audience === "client"
-      ? viewLabel()
-      : "Download PDF";
-    actions.push(button(input.pdfUrl, label, NAVY));
-  }
-
+/** Grey page, white card, navy banner, and navy footer shared by document emails. */
+export function renderBrandedEmailCard(input: {
+  banner: string;
+  introHtml: string;
+  linesHtml: string;
+  actionsHtml: string;
+  trackingPixelUrl?: string | null;
+}): string {
   const year = new Date().getFullYear();
   const pixel = input.trackingPixelUrl
     ? `<img src="${escapeHtml(input.trackingPixelUrl)}" width="1" height="1" alt="" style="display:none;" />`
@@ -165,7 +149,7 @@ export function renderDocumentEmail(input: DocumentEmailInput): string {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${escapeHtml(bannerLabel())}</title>
+<title>${escapeHtml(input.banner)}</title>
 </head>
 <body style="margin:0;padding:0;background-color:${PAGE};">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:${PAGE};">
@@ -173,24 +157,23 @@ export function renderDocumentEmail(input: DocumentEmailInput): string {
 <td align="center" style="padding:28px 12px;">
 <table role="presentation" width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background-color:#ffffff;border-radius:6px;overflow:hidden;">
 <tr>
-<td align="center" style="background-color:${NAVY};padding:22px 20px;">
-<p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;letter-spacing:1.5px;color:#ffffff;">${bannerLabel()}</p>
+<td align="center" style="background-color:${EMAIL_NAVY};padding:22px 20px;">
+<p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;letter-spacing:1.5px;color:#ffffff;">${escapeHtml(input.banner)}</p>
 </td>
 </tr>
 <tr>
 <td style="padding:28px 32px 8px 32px;font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;">
-<p style="margin:0 0 14px 0;font-size:14px;line-height:1.5;">Hello ${escapeHtml(hello)},</p>
-<p style="margin:0 0 22px 0;font-size:14px;line-height:1.55;">${escapeHtml(bodyCopy(input))}</p>
-${lines}
+${input.introHtml}
+${input.linesHtml}
 </td>
 </tr>
 <tr>
 <td align="center" style="padding:18px 20px 36px 20px;">
-${actions.join("")}
+${input.actionsHtml}
 </td>
 </tr>
 <tr>
-<td align="center" style="background-color:${NAVY};padding:16px 18px;">
+<td align="center" style="background-color:${EMAIL_NAVY};padding:16px 18px;">
 <p style="margin:0 0 4px 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.4;color:#ffffff;">Service provided by</p>
 <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.4;color:#ffffff;">© ${year} Thunder Pro Inc. | <a href="https://www.thunderpro.co" style="color:#ffffff;text-decoration:underline;">www.thunderpro.co</a></p>
 </td>
@@ -202,4 +185,40 @@ ${actions.join("")}
 ${pixel}
 </body>
 </html>`;
+}
+
+export function renderDocumentEmail(input: DocumentEmailInput): string {
+  const hello = input.greetingName.trim() || "there";
+  const lines = [
+    emailDetailLine(numberLabel(), input.documentNumber),
+    emailDetailLine("Date", input.dateLabel),
+    emailDetailLine("Service Type", input.serviceType),
+    `<p style="margin:0 0 14px 0;font-size:8px;line-height:8px;">&nbsp;</p>`,
+    emailDetailLine("Name", input.contact.name),
+    emailDetailLine("Email", input.contact.email),
+    emailDetailLine("Phone", input.contact.phone),
+    emailDetailLine("Address", input.contact.address),
+  ].join("");
+
+  const actions: string[] = [];
+  if (input.moment === "sent" && input.audience === "client" && input.acceptUrl) {
+    actions.push(emailActionButton(input.acceptUrl, acceptLabel(), EMAIL_GREEN));
+  }
+  if (input.pdfUrl) {
+    const label = input.moment === "sent" && input.audience === "client"
+      ? viewLabel()
+      : "Download PDF";
+    actions.push(emailActionButton(input.pdfUrl, label, EMAIL_NAVY));
+  }
+
+  const introHtml = `<p style="margin:0 0 14px 0;font-size:14px;line-height:1.5;">Hello ${escapeHtml(hello)},</p>
+<p style="margin:0 0 22px 0;font-size:14px;line-height:1.55;">${escapeHtml(bodyCopy(input))}</p>`;
+
+  return renderBrandedEmailCard({
+    banner: bannerLabel(),
+    introHtml,
+    linesHtml: lines,
+    actionsHtml: actions.join(""),
+    trackingPixelUrl: input.trackingPixelUrl,
+  });
 }

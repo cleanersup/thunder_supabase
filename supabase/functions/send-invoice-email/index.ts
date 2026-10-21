@@ -3,9 +3,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
 import { resolvePublicAppUrl } from "../_shared/resolvePublicAppUrl.ts";
-import { computeInvoiceAmountDue } from "../_shared/invoiceAmountDue.ts";
+import { resolveInvoicePdfUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
 import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
-import { buildInvoiceTotalsSummaryHtml, calculateInvoiceTotals } from "../_shared/invoiceCalculations.ts";
+import { formatPhoneDisplay, formatStreetAddress, personFirstName } from "../_shared/documentEmailCard.ts";
+import { renderInvoiceEmail } from "../_shared/invoiceEmailCard.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -207,7 +208,7 @@ serve(async (req) => {
       // Fetch company profile
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select('company_name, company_email, company_phone, company_logo, timezone')
+        .select('first_name, last_name, company_name, company_email, company_phone, company_address, company_apt_suite, company_city, company_state, company_zip, timezone')
         .eq('user_id', invoice.user_id)
         .single();
 
@@ -217,94 +218,73 @@ serve(async (req) => {
 
       const companyName = profile.company_name || 'Our Company';
       let ownerEmail: string | null = profile.company_email ?? null;
-      const companyLogo = profile.company_logo;
       const userTimezone = profile.timezone || 'America/New_York';
+      const ownerName = [profile.first_name, profile.last_name].filter(Boolean).join(' ').trim();
 
       if (!ownerEmail) {
         const { data: authData } = await supabase.auth.admin.getUserById(invoice.user_id);
         ownerEmail = authData.user?.email ?? null;
       }
 
-      // Format calendar dates (YYYY-MM-DD) without timezone day shift
       const formatDateInTimezone = (dateStr: string, timezone: string): string =>
         formatDateOnlyLong(dateStr, timezone);
 
       const invoiceDateFormatted = formatDateInTimezone(invoice.invoice_date, userTimezone);
       const dueDateFormatted = formatDateInTimezone(invoice.due_date, userTimezone);
-      const f = (n: number) => `$${n.toFixed(2)}`;
-      const invoiceTotals = calculateInvoiceTotals(invoice);
-      const amountDue = computeInvoiceAmountDue(invoice);
-      const totalsSummaryHtml = buildInvoiceTotalsSummaryHtml(invoiceTotals, f);
+      const clientFirst = personFirstName(invoice.client_name);
+      const clientContact = {
+        name: String(invoice.client_name || ''),
+        email: String(invoice.email || ''),
+        phone: formatPhoneDisplay(invoice.phone),
+        address: formatStreetAddress([
+          invoice.address,
+          invoice.apt,
+          invoice.city,
+          invoice.state,
+          invoice.zip,
+        ]),
+      };
+      const ownerContact = {
+        name: ownerName || companyName,
+        email: String(ownerEmail || profile.company_email || ''),
+        phone: formatPhoneDisplay(profile.company_phone),
+        address: formatStreetAddress([
+          profile.company_address,
+          profile.company_apt_suite,
+          profile.company_city,
+          profile.company_state,
+          profile.company_zip,
+        ]),
+      };
+      const pdfUrl = resolveInvoicePdfUrl(invoice.payment_token || invoice.id);
+      const cardBase = {
+        companyName,
+        clientFirstName: clientFirst,
+        invoiceNumber: String(invoice.invoice_number || ''),
+        invoiceDate: invoiceDateFormatted === 'N/A' ? '' : invoiceDateFormatted,
+        dueDate: dueDateFormatted === 'N/A' ? '' : dueDateFormatted,
+        serviceType: String(invoice.service_type || ''),
+        pdfUrl,
+      };
 
-      // ── Paid confirmation (client + merchant) — used by Stripe/manual flows via DB trigger or direct invoke
+      // Paid confirmation (client + owner). Stripe and manual payment call this with isPaymentConfirmation.
       if (isPaymentConfirmation) {
-        const paidRaw = invoice.paid_date || new Date().toISOString().split("T")[0];
-        const paidDateFormatted = formatDateInTimezone(paidRaw, userTimezone);
-        const pmRaw = (invoice.payment_method || "Payment").toString();
-        const pmLabel = pmRaw.length > 0
-          ? pmRaw.charAt(0).toUpperCase() + pmRaw.slice(1)
-          : "Payment";
-        const clientPortalBase = (Deno.env.get("CLIENT_DASHBOARD__URL") || "https://client.staging.thunderpro.co").replace(/\/$/, "");
-        const clientPortalLoginUrl = `${clientPortalBase}/login?owner=${encodeURIComponent(invoice.user_id)}`;
-
-        const clientPaidHtml = `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"></head>
-<body style="margin:0;padding:20px;font-family:Arial,sans-serif;background:#f5f5f5">
-<div style="max-width:600px;margin:0 auto;background:#fff">
-  <div style="text-align:center;padding:20px;background:#10b981;color:#fff">
-    <p style="margin:0;font-size:42px">✓</p>
-    <h1 style="margin:8px 0 0 0;font-size:22px">Payment received</h1>
-    <p style="margin:8px 0 0 0;font-size:14px">Thank you — your invoice is paid in full.</p>
-  </div>
-  <div style="padding:24px;color:#333">
-    <p style="margin:0 0 12px 0">Hello ${invoice.client_name},</p>
-    <p style="margin:0 0 20px 0">We’ve recorded your payment to <strong>${companyName}</strong>. Details below.</p>
-    <table cellpadding="0" cellspacing="0" style="width:100%;background:#f0fdf4;border-radius:6px">
-      <tr><td style="padding:16px">
-        <table cellpadding="0" cellspacing="0" style="width:100%">
-          <tr><td style="padding:6px 0"><strong>Invoice</strong></td><td style="padding:6px 0;text-align:right">${invoice.invoice_number}</td></tr>
-          <tr><td style="padding:6px 0"><strong>Amount paid</strong></td><td style="padding:6px 0;text-align:right;font-weight:bold;color:#059669">${f(Number(invoice.total) || 0)}</td></tr>
-          <tr><td style="padding:6px 0"><strong>Payment date</strong></td><td style="padding:6px 0;text-align:right">${paidDateFormatted}</td></tr>
-          <tr><td style="padding:6px 0"><strong>Method</strong></td><td style="padding:6px 0;text-align:right">${pmLabel}</td></tr>
-        </table>
-      </td></tr>
-    </table>
-    <div style="text-align:center;margin:24px 0 8px 0">
-      <a href="${clientPortalLoginUrl}" style="display:inline-block;background:#2563eb;color:#ffffff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:bold">Open client portal</a>
-    </div>
-    <p style="margin:0 0 20px 0;font-size:13px;color:#6b7280;text-align:center">Use your email address to receive a secure access link.</p>
-    <p style="margin:20px 0 0 0;font-size:13px;color:#6b7280">If you have questions, reply to this email or contact ${companyName}.</p>
-  </div>
-  <div style="text-align:center;padding:16px;background:#1e3a8a;color:#fff;font-size:12px">
-    © Thunder Pro · <a href="https://www.thunderpro.co" style="color:#fff">thunderpro.co</a>
-  </div>
-</div></body></html>`;
-
-        const ownerPaidHtml = `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"></head>
-<body style="margin:0;padding:20px;font-family:Arial,sans-serif;background:#f5f5f5">
-<div style="max-width:600px;margin:0 auto;background:#fff">
-  <div style="text-align:center;padding:16px;background:#1e3a8a;color:#fff">
-    <p style="margin:0;font-size:12px;font-weight:bold;background:#1e40af;padding:8px;border-radius:4px;display:inline-block">OWNER · Payment received</p>
-    <h1 style="margin:12px 0 0 0;font-size:20px">Invoice marked paid</h1>
-  </div>
-  <div style="padding:24px;color:#333">
-    <p style="margin:0 0 8px 0"><strong>${invoice.client_name}</strong> paid invoice <strong>${invoice.invoice_number}</strong>.</p>
-    <table cellpadding="0" cellspacing="0" style="width:100%;margin-top:16px;background:#f0fdf4;border-radius:6px">
-      <tr><td style="padding:16px">
-        <table cellpadding="0" cellspacing="0" style="width:100%">
-          <tr><td style="padding:6px 0">Amount</td><td style="padding:6px 0;text-align:right;font-weight:bold">${f(Number(invoice.total) || 0)}</td></tr>
-          <tr><td style="padding:6px 0">Paid date</td><td style="padding:6px 0;text-align:right">${paidDateFormatted}</td></tr>
-          <tr><td style="padding:6px 0">Method</td><td style="padding:6px 0;text-align:right">${pmLabel}</td></tr>
-          <tr><td style="padding:6px 0">Client email</td><td style="padding:6px 0;text-align:right">${invoice.email}</td></tr>
-        </table>
-      </td></tr>
-    </table>
-  </div>
-  <div style="text-align:center;padding:16px;background:#1e3a8a;color:#fff;font-size:12px">
-    © Thunder Pro · <a href="https://www.thunderpro.co" style="color:#fff">thunderpro.co</a>
-  </div>
-</div></body></html>`;
+        const clientPaidHtml = renderInvoiceEmail({
+          ...cardBase,
+          audience: 'client',
+          moment: 'paid',
+          greetingName: clientFirst,
+          contact: ownerContact,
+          payUrl: null,
+        });
+        const ownerPaidHtml = renderInvoiceEmail({
+          ...cardBase,
+          audience: 'owner',
+          moment: 'paid',
+          greetingName: personFirstName(ownerName),
+          contact: clientContact,
+          payUrl: null,
+        });
 
         console.log("Sending payment confirmation to client:", invoice.email);
         await sendEmailViaSMTP(
@@ -334,7 +314,7 @@ serve(async (req) => {
         );
       }
 
-      // Prepare invoice payment link (this would be a public page where client can pay)
+      // Pay stays on the payment page. Download opens the invoice PDF.
       const publicAppUrlEnv = Deno.env.get('PUBLIC_APP_URL');
       const appUrlEnv = Deno.env.get('APP_URL');
       const supabaseUrlEnv = Deno.env.get('SUPABASE_URL');
@@ -345,10 +325,7 @@ serve(async (req) => {
       console.log('SUPABASE_URL from env:', supabaseUrlEnv || 'NOT SET');
 
       const publicAppUrl = resolvePublicAppUrl();
-      // Use payment_token (opaque) instead of raw UUID to prevent URL enumeration
       const paymentLink = `${publicAppUrl}/invoice/payment/${invoice.payment_token || invoiceId}`;
-
-      // Public Supabase URL for Edge Functions (download PDF, tracking pixel, etc.)
       const publicSupabaseUrl = resolvePublicSupabaseUrl();
 
       console.log('Selected publicAppUrl:', publicAppUrl);
@@ -356,329 +333,27 @@ serve(async (req) => {
       console.log('Generated paymentLink:', paymentLink);
       console.log('=== End Payment Link Debug ===');
 
-      // Generate tracking pixel URL (use public URL so email clients can reach it when user opens email)
       const trackingPixelUrl = `${publicSupabaseUrl}/functions/v1/mark-viewed?type=invoice&id=${invoiceId}`;
+      const clientEmailHtml = renderInvoiceEmail({
+        ...cardBase,
+        audience: 'client',
+        moment: 'sent',
+        greetingName: clientFirst,
+        contact: ownerContact,
+        payUrl: paymentLink,
+        trackingPixelUrl,
+        isUpdate,
+      });
+      const ownerEmailHtml = renderInvoiceEmail({
+        ...cardBase,
+        audience: 'owner',
+        moment: 'sent',
+        greetingName: personFirstName(ownerName),
+        contact: clientContact,
+        payUrl: null,
+        isUpdate,
+      });
 
-      // Email to Client - Gmail-compatible HTML (tables only, inline styles)
-      const clientEmailHtml = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin:0;padding:0;font-family:Arial,sans-serif;background-color:#f5f5f5">
-<table cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#f5f5f5;padding:20px 0">
-  <tr>
-    <td align="center">
-      <table cellpadding="0" cellspacing="0" border="0" width="600" style="max-width:600px;background-color:#ffffff">
-        
-        <!-- Header -->
-        <tr>
-          <td align="center" style="background-color:#1e3a8a;padding:15px;color:#ffffff">
-            <h1 style="margin:0;padding:0;font-size:22px;color:#ffffff">${companyName}</h1>
-            <p style="margin:5px 0 0 0;padding:0;font-size:14px;color:#ffffff">Professional Cleaning Invoice</p>
-          </td>
-        </tr>
-        
-        <!-- Content -->
-        <tr>
-          <td style="padding:20px">
-            
-            <!-- Client Information -->
-            <table cellpadding="0" cellspacing="0" border="0" width="100%">
-              <tr>
-                <td>
-                  <h3 style="margin:0 0 8px 0;padding:0;color:#1e3a8a;font-size:16px">Client Information</h3>
-                  <div style="border-top:2px solid #1e3a8a;margin-bottom:12px"></div>
-                  <p style="margin:0;padding:0;line-height:1.6;color:#333333">
-                    <strong>Name:</strong> ${invoice.client_name}<br>
-                    <strong>Email:</strong> ${invoice.email}<br>
-                    <strong>Phone:</strong> ${invoice.phone}<br>
-                    ${invoice.property_title ? `<strong>Property:</strong> ${invoice.property_title}<br>` : ''}
-                    <strong>Address:</strong> ${invoice.address}${invoice.apt ? `, ${invoice.apt}` : ''}, ${invoice.city}, ${invoice.state} ${invoice.zip}
-                  </p>
-                </td>
-              </tr>
-            </table>
-            
-            <!-- Invoice Details -->
-            <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px">
-              <tr>
-                <td>
-                  <h3 style="margin:0 0 8px 0;padding:0;color:#1e3a8a;font-size:16px">Invoice Details</h3>
-                  <div style="border-top:2px solid #1e3a8a;margin-bottom:12px"></div>
-                  <p style="margin:0;padding:0;line-height:1.6;color:#333333">
-                    <strong>Invoice Number:</strong> ${invoice.invoice_number}<br>
-                    <strong>Invoice Date:</strong> ${invoiceDateFormatted}<br>
-                    <strong>Due Date:</strong> ${dueDateFormatted}<br>
-                    <strong>Service Type:</strong> ${invoice.service_type}
-                  </p>
-                </td>
-              </tr>
-            </table>
-            
-            ${invoice.line_items && invoice.line_items.length > 0 ? `
-            <!-- Line Items -->
-            <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px">
-              <tr>
-                <td>
-                  <h3 style="margin:0 0 8px 0;padding:0;color:#1e3a8a;font-size:16px">Line Items</h3>
-                  <div style="border-top:2px solid #1e3a8a;margin-bottom:12px"></div>
-                  <table cellpadding="8" cellspacing="0" border="0" width="100%" style="border:1px solid #e5e7eb">
-                    <thead>
-                      <tr style="background-color:#f9fafb">
-                        <th style="text-align:left;padding:10px;font-size:12px;font-weight:600;color:#374151;border-bottom:1px solid #e5e7eb">Description</th>
-                        <th style="text-align:center;padding:10px;font-size:12px;font-weight:600;color:#374151;border-bottom:1px solid #e5e7eb">Price</th>
-                        <th style="text-align:center;padding:10px;font-size:12px;font-weight:600;color:#374151;border-bottom:1px solid #e5e7eb">Qty</th>
-                        <th style="text-align:right;padding:10px;font-size:12px;font-weight:600;color:#374151;border-bottom:1px solid #e5e7eb">Total</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      ${invoice.line_items.map((item: any, index: number) => `
-                      <tr${index % 2 === 1 ? ' style="background-color:#f9fafb"' : ''}>
-                        <td style="padding:10px;font-size:13px;color:#333333;border-bottom:1px solid #e5e7eb">${item.description || '-'}</td>
-                        <td style="text-align:center;padding:10px;font-size:13px;color:#333333;border-bottom:1px solid #e5e7eb">${f(parseFloat(item.price) || 0)}</td>
-                        <td style="text-align:center;padding:10px;font-size:13px;color:#333333;border-bottom:1px solid #e5e7eb">${item.qty || 1}</td>
-                        <td style="text-align:right;padding:10px;font-size:13px;font-weight:600;color:#333333;border-bottom:1px solid #e5e7eb">${f(item.total || 0)}</td>
-                      </tr>
-                      `).join('')}
-                    </tbody>
-                  </table>
-                </td>
-              </tr>
-            </table>
-            ` : ''}
-            
-            ${totalsSummaryHtml}
-            
-            ${invoice.notes ? `
-            <!-- Notes -->
-            <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px">
-              <tr>
-                <td>
-                  <h3 style="margin:0 0 8px 0;padding:0;color:#1e3a8a;font-size:16px">Notes</h3>
-                  <div style="border-top:2px solid #1e3a8a;margin-bottom:12px"></div>
-                  <p style="margin:0;padding:0;line-height:1.6;color:#333333">${invoice.notes}</p>
-                </td>
-              </tr>
-            </table>
-            ` : ''}
-            
-            <!-- Amount Due -->
-            <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px">
-              <tr>
-                <td>
-                  <h3 style="margin:0 0 8px 0;padding:0;color:#1e3a8a;font-size:16px">Amount Due</h3>
-                </td>
-              </tr>
-              <tr>
-                <td>
-                  <table cellpadding="16" cellspacing="0" border="0" width="100%" style="background-color:#f0fdf4">
-                    <tr>
-                      <td style="text-align:left;font-weight:bold;font-size:20px;color:#1e3a8a">Total Amount Due:</td>
-                      <td style="text-align:right;font-weight:bold;font-size:20px;color:#1e3a8a">${f(amountDue)}</td>
-                    </tr>
-                  </table>
-                </td>
-              </tr>
-            </table>
-            
-            <!-- Action Buttons -->
-            <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:30px">
-              <tr>
-                <td align="center">
-                  <a href="${paymentLink}" style="display:inline-block;background-color:#10b981;color:#ffffff;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:5px">Pay Invoice</a>
-                  <a href="${publicSupabaseUrl}/functions/v1/download-invoice-pdf?id=${invoiceId}" style="display:inline-block;background-color:#1e3a8a;color:#ffffff;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:5px">Download PDF</a>
-                </td>
-              </tr>
-            </table>
-            
-          </td>
-        </tr>
-        
-        <!-- Footer -->
-        <tr>
-          <td align="center" style="background-color:#1e3a8a;padding:15px;color:#ffffff">
-            <p style="margin:0 0 5px 0;padding:0;font-size:12px;color:#ffffff">Service provided by</p>
-            <p style="margin:0;padding:0;font-size:12px;color:#ffffff">© 2024 Thunder Pro Inc. | <a href="https://www.thunderpro.co" style="color:#ffffff;text-decoration:underline">www.thunderpro.co</a></p>
-          </td>
-        </tr>
-        
-      </table>
-    </td>
-  </tr>
-</table>
-
-<!-- Tracking pixel -->
-<img src="${trackingPixelUrl}" width="1" height="1" style="display:none" alt="" />
-
-</body>
-</html>`;
-
-      // Email to Owner - Gmail-compatible HTML (tables only, inline styles)
-      const ownerEmailHtml = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin:0;padding:0;font-family:Arial,sans-serif;background-color:#f5f5f5">
-<table cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#f5f5f5;padding:20px 0">
-  <tr>
-    <td align="center">
-      <table cellpadding="0" cellspacing="0" border="0" width="600" style="max-width:600px;background-color:#ffffff">
-        
-        <!-- Header -->
-        <tr>
-          <td align="center" style="background-color:#1e3a8a;padding:15px;color:#ffffff">
-            <table cellpadding="8" cellspacing="0" border="0" width="100%">
-              <tr>
-                <td align="center" style="background-color:#1e40af;border-radius:4px">
-                  <p style="margin:0;padding:0;font-size:14px;font-weight:bold;color:#ffffff">OWNER COPY - INTERNAL USE ONLY</p>
-                </td>
-              </tr>
-            </table>
-            <h1 style="margin:10px 0 0 0;padding:0;font-size:22px;color:#ffffff">${companyName}</h1>
-            <p style="margin:5px 0 0 0;padding:0;font-size:14px;color:#ffffff">Invoice Sent Confirmation</p>
-          </td>
-        </tr>
-        
-        <!-- Content -->
-        <tr>
-          <td style="padding:20px">
-            
-            <!-- Success Message -->
-            <table cellpadding="12" cellspacing="0" border="0" width="100%" style="background-color:#f0fdf4;border-left:4px solid #10b981;margin-bottom:15px">
-              <tr>
-                <td>
-                  <p style="margin:0 0 5px 0;padding:0;font-weight:bold;color:#059669">Invoice Successfully Sent</p>
-                  <p style="margin:0;padding:0;font-size:13px;color:#333333">An invoice has been sent to ${invoice.client_name}</p>
-                </td>
-              </tr>
-            </table>
-            
-            <!-- Client Information -->
-            <table cellpadding="0" cellspacing="0" border="0" width="100%">
-              <tr>
-                <td>
-                  <h3 style="margin:0 0 8px 0;padding:0;color:#1e3a8a;font-size:16px">Client Information</h3>
-                  <div style="border-top:2px solid #1e3a8a;margin-bottom:12px"></div>
-                  <p style="margin:0;padding:0;line-height:1.6;color:#333333">
-                    <strong>Name:</strong> ${invoice.client_name}<br>
-                    <strong>Email:</strong> ${invoice.email}<br>
-                    <strong>Phone:</strong> ${invoice.phone}<br>
-                    ${invoice.property_title ? `<strong>Property:</strong> ${invoice.property_title}<br>` : ''}
-                    <strong>Address:</strong> ${invoice.address}${invoice.apt ? `, ${invoice.apt}` : ''}, ${invoice.city}, ${invoice.state} ${invoice.zip}
-                  </p>
-                </td>
-              </tr>
-            </table>
-            
-            <!-- Invoice Details -->
-            <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px">
-              <tr>
-                <td>
-                  <h3 style="margin:0 0 8px 0;padding:0;color:#1e3a8a;font-size:16px">Invoice Details</h3>
-                  <div style="border-top:2px solid #1e3a8a;margin-bottom:12px"></div>
-                  <p style="margin:0;padding:0;line-height:1.6;color:#333333">
-                    <strong>Invoice Number:</strong> ${invoice.invoice_number}<br>
-                    <strong>Invoice Date:</strong> ${invoiceDateFormatted}<br>
-                    <strong>Due Date:</strong> ${dueDateFormatted}<br>
-                    <strong>Service Type:</strong> ${invoice.service_type}
-                  </p>
-                </td>
-              </tr>
-            </table>
-            
-            ${invoice.line_items && invoice.line_items.length > 0 ? `
-            <!-- Line Items -->
-            <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px">
-              <tr>
-                <td>
-                  <h3 style="margin:0 0 8px 0;padding:0;color:#1e3a8a;font-size:16px">Line Items</h3>
-                  <div style="border-top:2px solid #1e3a8a;margin-bottom:12px"></div>
-                  <table cellpadding="8" cellspacing="0" border="0" width="100%" style="border:1px solid #e5e7eb">
-                    <thead>
-                      <tr style="background-color:#f9fafb">
-                        <th style="text-align:left;padding:10px;font-size:12px;font-weight:600;color:#374151;border-bottom:1px solid #e5e7eb">Description</th>
-                        <th style="text-align:center;padding:10px;font-size:12px;font-weight:600;color:#374151;border-bottom:1px solid #e5e7eb">Price</th>
-                        <th style="text-align:center;padding:10px;font-size:12px;font-weight:600;color:#374151;border-bottom:1px solid #e5e7eb">Qty</th>
-                        <th style="text-align:right;padding:10px;font-size:12px;font-weight:600;color:#374151;border-bottom:1px solid #e5e7eb">Total</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      ${invoice.line_items.map((item: any, index: number) => `
-                      <tr${index % 2 === 1 ? ' style="background-color:#f9fafb"' : ''}>
-                        <td style="padding:10px;font-size:13px;color:#333333;border-bottom:1px solid #e5e7eb">${item.description || '-'}</td>
-                        <td style="text-align:center;padding:10px;font-size:13px;color:#333333;border-bottom:1px solid #e5e7eb">${f(parseFloat(item.price) || 0)}</td>
-                        <td style="text-align:center;padding:10px;font-size:13px;color:#333333;border-bottom:1px solid #e5e7eb">${item.qty || 1}</td>
-                        <td style="text-align:right;padding:10px;font-size:13px;font-weight:600;color:#333333;border-bottom:1px solid #e5e7eb">${f(item.total || 0)}</td>
-                      </tr>
-                      `).join('')}
-                    </tbody>
-                  </table>
-                </td>
-              </tr>
-            </table>
-            ` : ''}
-            
-            ${totalsSummaryHtml}
-            
-            <!-- Amount -->
-            <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px">
-              <tr>
-                <td>
-                  <h3 style="margin:0 0 8px 0;padding:0;color:#1e3a8a;font-size:16px">Amount</h3>
-                </td>
-              </tr>
-              <tr>
-                <td>
-                  <table cellpadding="16" cellspacing="0" border="0" width="100%" style="background-color:#f0fdf4">
-                    <tr>
-                      <td style="text-align:left;font-weight:bold;font-size:20px;color:#1e3a8a">Total:</td>
-                      <td style="text-align:right;font-weight:bold;font-size:20px;color:#1e3a8a">${f(amountDue)}</td>
-                    </tr>
-                  </table>
-                </td>
-              </tr>
-            </table>
-            
-            <!-- Download PDF Button for Owner -->
-            <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px">
-              <tr>
-                <td align="center">
-                  <a href="${publicSupabaseUrl}/functions/v1/download-invoice-pdf?id=${invoiceId}" style="display:inline-block;background-color:#1e3a8a;color:#ffffff;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold">Download PDF</a>
-                </td>
-              </tr>
-            </table>
-            
-            <!-- Info Box -->
-            <table cellpadding="12" cellspacing="0" border="0" width="100%" style="margin-top:20px;background-color:#eff6ff;border-left:4px solid #3b82f6">
-              <tr>
-                <td>
-                  <p style="margin:0;padding:0;font-size:13px;color:#1e40af">💡 The client can pay online using the payment link sent in their email.</p>
-                </td>
-              </tr>
-            </table>
-            
-          </td>
-        </tr>
-        
-        <!-- Footer -->
-        <tr>
-          <td align="center" style="background-color:#1e3a8a;padding:15px;color:#ffffff">
-            <p style="margin:0 0 5px 0;padding:0;font-size:12px;color:#ffffff">Service provided by</p>
-            <p style="margin:0;padding:0;font-size:12px;color:#ffffff">© 2024 Thunder Pro Inc. | <a href="https://www.thunderpro.co" style="color:#ffffff;text-decoration:underline">www.thunderpro.co</a></p>
-          </td>
-        </tr>
-        
-      </table>
-    </td>
-  </tr>
-</table>
-
-</body>
-</html>`;
 
       console.log('Sending client invoice email to:', invoice.email);
 
