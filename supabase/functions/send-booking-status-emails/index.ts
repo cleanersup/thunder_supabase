@@ -1,6 +1,14 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { resolveOwnerReplyEmail } from "../_shared/resolveOwnerReplyEmail.ts";
+import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
+import { formatPhoneDisplay, formatStreetAddress, personFirstName } from "../_shared/documentEmailCard.ts";
+import {
+  formatRequestServiceType,
+  formatTimePreferred,
+  renderRequestEmail,
+  type RequestConversionTarget,
+} from "../_shared/requestEmailCard.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -14,9 +22,13 @@ type BookingRow = {
   phone: string;
   service_type: string;
   street: string;
+  apt_suite: string | null;
   city: string;
   state: string;
   zip_code: string;
+  preferred_date: string | null;
+  time_preference: string | null;
+  created_at: string;
   business_owner_id: string;
 };
 
@@ -113,6 +125,59 @@ async function sendEmailViaSMTP(
   }
 }
 
+function submittedDateLabel(createdAt: string, timezone: string): string {
+  const parsed = new Date(createdAt);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const options: Intl.DateTimeFormatOptions = {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  };
+  try {
+    return new Intl.DateTimeFormat("en-US", { ...options, timeZone: timezone }).format(parsed);
+  } catch {
+    return new Intl.DateTimeFormat("en-US", { ...options, timeZone: "UTC" }).format(parsed);
+  }
+}
+
+function requestCardHtml(input: {
+  kind: "received" | "new" | "converted";
+  booking: BookingRow;
+  companyName: string;
+  greetingName: string;
+  timezone: string;
+  conversionTarget?: RequestConversionTarget;
+  logoUrl?: string | null;
+}): string {
+  const preferred = input.booking.preferred_date
+    ? formatDateOnlyLong(input.booking.preferred_date, input.timezone)
+    : "";
+  return renderRequestEmail({
+    kind: input.kind,
+    companyName: input.companyName,
+    greetingName: input.greetingName,
+    clientFirstName: personFirstName(input.booking.lead_name),
+    conversionTarget: input.conversionTarget,
+    dateLabel: submittedDateLabel(input.booking.created_at, input.timezone),
+    serviceType: formatRequestServiceType(input.booking.service_type),
+    preferredDate: !preferred || preferred === "N/A" ? "" : preferred,
+    timePreferred: formatTimePreferred(input.booking.time_preference),
+    logoUrl: input.logoUrl,
+    contact: {
+      name: input.booking.lead_name,
+      email: input.booking.email,
+      phone: formatPhoneDisplay(input.booking.phone),
+      address: formatStreetAddress([
+        input.booking.street,
+        input.booking.apt_suite,
+        input.booking.city,
+        input.booking.state,
+        input.booking.zip_code,
+      ]),
+    },
+  });
+}
+
 function detailBlock(b: BookingRow, companyName: string): string {
   return `
     <div class="details">
@@ -200,10 +265,12 @@ serve(async (req) => {
     const b = booking as BookingRow;
     const { data: profile } = await supabase
       .from("profiles")
-      .select("company_name, company_email")
+      .select("first_name, last_name, company_name, company_email, company_logo, timezone")
       .eq("user_id", b.business_owner_id)
       .maybeSingle();
     const companyName = profile?.company_name || "Your cleaning provider";
+    const userTimezone = profile?.timezone || "America/New_York";
+    const ownerFirst = personFirstName([profile?.first_name, profile?.last_name].filter(Boolean).join(" "));
 
     let ownerEmail: string;
     let ownerReplyTo: string;
@@ -225,17 +292,16 @@ serve(async (req) => {
       status: newStatus,
     });
 
-    let conversionHint = "";
+    let conversionTarget: RequestConversionTarget = "next";
     if (newStatus === "converted") {
       const { data: est } = await supabase.from("estimates").select("id").eq("booking_id", bookingId).limit(1).maybeSingle();
       const { data: wt } = await supabase.from("walkthroughs").select("id").eq("booking_id", bookingId).limit(1).maybeSingle();
-      if (est?.id) conversionHint = "an estimate";
-      else if (wt?.id) conversionHint = "a walkthrough";
-      else conversionHint = "the next step in our process";
+      if (est?.id) conversionTarget = "estimate";
+      else if (wt?.id) conversionTarget = "walkthrough";
       console.log("[send-booking-status-emails] conversion target resolved", {
         estimateId: est?.id ?? null,
         walkthroughId: wt?.id ?? null,
-        conversionHint,
+        conversionTarget,
       });
     }
 
@@ -248,20 +314,16 @@ serve(async (req) => {
       case "converted":
         leadSubject = `Update — your request with ${companyName}`;
         ownerSubject = `Request converted — ${b.lead_name}`;
-        leadHtml = wrapLead(
-          "indigo",
-          "Request update",
-          `<p>Dear ${b.lead_name},</p><p>Your service request has been moved forward as ${conversionHint}. We will follow up with any next steps.</p>`,
-          b,
+        leadHtml = "";
+        ownerHtml = requestCardHtml({
+          kind: "converted",
+          booking: b,
           companyName,
-        );
-        ownerHtml = wrapOwner(
-          "green",
-          "Request converted",
-          `<p>The request for <strong>${b.lead_name}</strong> (${b.email}) was converted (previous status: ${previousStatus ?? "N/A"}).</p>`,
-          b,
-          companyName,
-        );
+          greetingName: ownerFirst,
+          timezone: userTimezone,
+          conversionTarget,
+          logoUrl: profile?.company_logo ?? null,
+        });
         break;
       case "cancelled":
         leadSubject = `Request cancelled — ${companyName}`;
@@ -303,20 +365,22 @@ serve(async (req) => {
         if (operation === "INSERT" || previousStatus === null) {
           leadSubject = `Request Confirmation - ${companyName}`;
           ownerSubject = `🎉 New Request - ${b.lead_name}`;
-          leadHtml = wrapLead(
-            "indigo",
-            "Thank you for your request",
-            `<p>Dear ${b.lead_name},</p><p>We received your request and our team will contact you soon.</p>`,
-            b,
+          leadHtml = requestCardHtml({
+            kind: "received",
+            booking: b,
             companyName,
-          );
-          ownerHtml = wrapOwner(
-            "green",
-            "New request",
-            `<p>A new request was created for <strong>${b.lead_name}</strong> (${b.email}).</p>`,
-            b,
+            greetingName: personFirstName(b.lead_name),
+            timezone: userTimezone,
+            logoUrl: profile?.company_logo ?? null,
+          });
+          ownerHtml = requestCardHtml({
+            kind: "new",
+            booking: b,
             companyName,
-          );
+            greetingName: ownerFirst,
+            timezone: userTimezone,
+            logoUrl: profile?.company_logo ?? null,
+          });
         } else {
           leadSubject = `Request restored — ${companyName}`;
           ownerSubject = `Request restored — ${b.lead_name}`;

@@ -128,7 +128,7 @@ async function notifyOwnerOfQuoteAccepted(
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("first_name, last_name, company_name, company_email, company_phone, company_address, company_apt_suite, company_city, company_state, company_zip, timezone")
+    .select("first_name, last_name, company_name, company_email, company_phone, company_address, company_apt_suite, company_city, company_state, company_zip, company_logo, timezone")
     .eq("user_id", userId)
     .maybeSingle();
 
@@ -145,6 +145,7 @@ async function notifyOwnerOfQuoteAccepted(
     kind: "quote" as const,
     moment: "accepted" as const,
     companyName,
+    logoUrl: profile?.company_logo ?? null,
     clientFirstName: clientFirst,
     documentNumber: cardNumber,
     dateLabel,

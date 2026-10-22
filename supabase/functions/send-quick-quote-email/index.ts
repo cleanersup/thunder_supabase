@@ -210,7 +210,7 @@ const handler = async (req: Request): Promise<Response> => {
       if (quote.user_id) {
         const { data: profile } = await admin
           .from('profiles')
-          .select('first_name, last_name, company_name, company_email, company_phone, company_address, company_apt_suite, company_city, company_state, company_zip, timezone')
+          .select('first_name, last_name, company_name, company_email, company_phone, company_address, company_apt_suite, company_city, company_state, company_zip, company_logo, timezone')
           .eq('user_id', quote.user_id)
           .maybeSingle();
 
@@ -262,6 +262,7 @@ const handler = async (req: Request): Promise<Response> => {
       const shared = {
         kind: 'quote' as const,
         companyName,
+        logoUrl: ownerProfile?.company_logo ?? null,
         clientFirstName: clientFirst,
         documentNumber,
         dateLabel,

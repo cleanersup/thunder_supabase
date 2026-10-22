@@ -31,6 +31,7 @@ export interface InvoiceEmailInput {
   payUrl: string | null;
   trackingPixelUrl?: string | null;
   isUpdate?: boolean;
+  logoUrl?: string | null;
 }
 
 function statusLine(input: InvoiceEmailInput): string {
@@ -92,5 +93,7 @@ ${statusHtml}<p style="margin:0 0 22px 0;font-size:14px;line-height:1.55;">${esc
     linesHtml: lines,
     actionsHtml: actions.join(""),
     trackingPixelUrl: input.trackingPixelUrl,
+    companyName: input.companyName,
+    logoUrl: input.logoUrl,
   });
 }
