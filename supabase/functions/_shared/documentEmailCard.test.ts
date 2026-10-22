@@ -104,6 +104,61 @@ test("owner accepted quote names the client and offers the PDF", () => {
   assert.doesNotMatch(html, /Accept Quote/);
 });
 
+test("client estimate update uses the update banner and both buttons", () => {
+  const html = renderDocumentEmail({
+    kind: "estimate",
+    audience: "client",
+    moment: "sent",
+    companyName: "Clean Up Company",
+    greetingName: "Pedro",
+    clientFirstName: "Pedro",
+    documentNumber: "A1B2C3D4",
+    dateLabel: "October 20, 2026",
+    serviceType: "Residential",
+    contact,
+    pdfUrl: "https://portal.thunderpro.co/functions/v1/download-estimate-pdf?token=abc",
+    acceptUrl: "https://portal.thunderpro.co/functions/v1/accept-estimate?id=1",
+    isUpdate: true,
+  });
+
+  assert.match(html, />ESTIMATE UPDATE</);
+  assert.doesNotMatch(html, /CONFIRMATION FOR CLIENT/);
+  assert.match(html, /Hello Pedro,/);
+  assert.match(html, /Clean Up Company has updated your estimate\./);
+  assert.match(html, /click the View Estimate button below to review the updated details online/);
+  assert.match(html, /Thank you for choosing Clean Up Company!/);
+  assert.match(html, />Accept Estimate</);
+  assert.match(html, />View Estimate</);
+  assert.doesNotMatch(html, /sent you an estimate/);
+});
+
+test("owner estimate update names the client and offers the PDF", () => {
+  const html = renderDocumentEmail({
+    kind: "estimate",
+    audience: "owner",
+    moment: "sent",
+    companyName: "Clean Up Company",
+    greetingName: "Javier",
+    clientFirstName: "Pedro",
+    documentNumber: "A1B2C3D4",
+    dateLabel: "October 20, 2026",
+    serviceType: "Residential",
+    contact: { ...contact, name: "Javier Silva" },
+    pdfUrl: "https://portal.thunderpro.co/functions/v1/download-estimate-pdf?token=abc",
+    acceptUrl: null,
+    isUpdate: true,
+  });
+
+  assert.match(html, />ESTIMATE UPDATE</);
+  assert.doesNotMatch(html, /CONFIRMATION TO OWNER/);
+  assert.match(html, /Hello Javier,/);
+  assert.match(html, /Your estimate for Pedro has been successfully updated/);
+  assert.match(html, /Javier Silva/);
+  assert.match(html, />Download PDF</);
+  assert.doesNotMatch(html, />Accept Estimate</);
+  assert.doesNotMatch(html, />View Estimate</);
+});
+
 test("contact helpers", () => {
   assert.equal(personFirstName("Pedro Cisneros"), "Pedro");
   assert.equal(formatPhoneDisplay("2134644428"), "(213)464-4428");

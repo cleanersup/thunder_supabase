@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { jobOrigin, logJobMessage } from "../_shared/jobMessageLog.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -35,6 +36,8 @@ type JobRow = {
   property_zip: string | null;
   assigned_employees: string[] | unknown;
   invoice_ids: string[] | null;
+  estimate_id?: string | null;
+  walkthrough_id?: string | null;
 };
 
 type EmployeeRow = {
@@ -388,13 +391,6 @@ serve(async (req) => {
     }
 
     const prev = previousStatus || "";
-    if (isAutoTemporalTransition(prev, newStatus)) {
-      return new Response(JSON.stringify({ success: true, skipped: "auto_temporal_transition" }), {
-        status: 200,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
@@ -406,8 +402,35 @@ serve(async (req) => {
       .single();
 
     if (jobError || !job) {
+      logJobMessage("status_email", {
+        jobId,
+        previousStatus: prev,
+        newStatus,
+        result: "skipped",
+        reason: "job_not_found",
+      });
       return new Response(JSON.stringify({ error: "Job not found" }), {
         status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const origin = jobOrigin(job);
+    const base = {
+      jobId,
+      jobNumber: job.job_number,
+      origin,
+      estimateId: job.estimate_id ?? null,
+      walkthroughId: job.walkthrough_id ?? null,
+      previousStatus: prev,
+      newStatus,
+    };
+
+    if (isAutoTemporalTransition(prev, newStatus)) {
+      logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "skipped", reason: "auto_temporal_transition" });
+      logJobMessage("status_email", { ...base, audience: "owner", channel: "email", result: "skipped", reason: "auto_temporal_transition" });
+      return new Response(JSON.stringify({ success: true, skipped: "auto_temporal_transition", origin }), {
+        status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -425,6 +448,7 @@ serve(async (req) => {
 
     const { data: authUser, error: authErr } = await supabase.auth.admin.getUserById(row.user_id);
     if (authErr || !authUser?.user?.email) {
+      logJobMessage("status_email", { ...base, audience: "owner", channel: "email", result: "error", reason: "owner_email_not_found" });
       return new Response(JSON.stringify({ error: "Owner email not found" }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -437,8 +461,15 @@ serve(async (req) => {
     const ownerMail = buildOwnerEmail(row, companyName, prev, newStatus);
     await sendEmailViaSMTP(ownerEmail, ownerMail.subject, ownerMail.html, ownerEmail);
     sent.push("owner");
+    logJobMessage("status_email", { ...base, audience: "owner", channel: "email", result: "sent" });
 
-    if (CLIENT_NOTIFY_STATUSES.has(newStatus) && row.client_email && shouldSendClientEmail(clientChannel)) {
+    if (!CLIENT_NOTIFY_STATUSES.has(newStatus)) {
+      logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "skipped", reason: "status_not_notifiable" });
+    } else if (!row.client_email) {
+      logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "skipped", reason: "no_client_email" });
+    } else if (!shouldSendClientEmail(clientChannel)) {
+      logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "skipped", reason: "client_channel", clientChannel: clientChannel ?? null });
+    } else {
       const paymentLink = newStatus === "completed"
         ? await resolveInvoicePaymentLink(supabase, row.invoice_ids)
         : null;
@@ -446,6 +477,9 @@ serve(async (req) => {
       if (clientMail) {
         await sendEmailViaSMTP(row.client_email, clientMail.subject, clientMail.html, ownerEmail);
         sent.push("client");
+        logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "sent" });
+      } else {
+        logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "skipped", reason: "no_template" });
       }
     }
 
@@ -462,15 +496,17 @@ serve(async (req) => {
           const mail = buildEmployeeEmail(row, employee, companyName, newStatus, timezone);
           await sendEmailViaSMTP(employee.email, mail.subject, mail.html, ownerEmail);
           sent.push(`employee:${employee.id}`);
+          logJobMessage("status_email", { ...base, audience: "employee", channel: "email", employeeId: employee.id, result: "sent" });
         }
       }
     }
 
-    return new Response(JSON.stringify({ success: true, sent }), {
+    return new Response(JSON.stringify({ success: true, sent, origin }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err: unknown) {
+    logJobMessage("status_email", { result: "error", reason: (err as Error).message });
     return new Response(JSON.stringify({ error: (err as Error).message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

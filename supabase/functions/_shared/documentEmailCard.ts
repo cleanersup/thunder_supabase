@@ -83,8 +83,8 @@ export function todayLongDate(now = new Date()): string {
   }).format(now);
 }
 
-function bannerLabel(): string {
-  return "ESTIMATE";
+function bannerLabel(isUpdate?: boolean): string {
+  return isUpdate ? "ESTIMATE UPDATE" : "ESTIMATE";
 }
 
 function numberLabel(): string {
@@ -101,6 +101,23 @@ function viewLabel(): string {
 
 function noun(): string {
   return "estimate";
+}
+
+/** Update copy from the estimate-update mockups. Null keeps the original send or accept text. */
+function updateParagraphs(input: DocumentEmailInput): string[] | null {
+  if (!input.isUpdate || input.moment !== "sent") return null;
+  const company = input.companyName.trim() || "your cleaning company";
+  const client = input.clientFirstName.trim() || "your client";
+  if (input.audience === "owner") {
+    return [
+      `Your estimate for ${client} has been successfully updated. You can review the updated estimate details in your Thunder Pro account.`,
+    ];
+  }
+  return [
+    `${company} has updated your estimate.`,
+    `Please download the attached PDF to review the changes, or click the ${viewLabel()} button below to review the updated details online.`,
+    `Thank you for choosing ${company}!`,
+  ];
 }
 
 function bodyCopy(input: DocumentEmailInput): string {
@@ -214,11 +231,15 @@ export function renderDocumentEmail(input: DocumentEmailInput): string {
     actions.push(emailActionButton(input.pdfUrl, label, EMAIL_NAVY));
   }
 
+  const paragraphs = updateParagraphs(input) ?? [bodyCopy(input)];
   const introHtml = `<p style="margin:0 0 14px 0;font-size:14px;line-height:1.5;">Hello ${escapeHtml(hello)},</p>
-<p style="margin:0 0 22px 0;font-size:14px;line-height:1.55;">${escapeHtml(bodyCopy(input))}</p>`;
+${paragraphs.map((text, index) => {
+    const margin = index === paragraphs.length - 1 ? "0 0 22px 0" : "0 0 14px 0";
+    return `<p style="margin:${margin};font-size:14px;line-height:1.55;">${escapeHtml(text)}</p>`;
+  }).join("")}`;
 
   return renderBrandedEmailCard({
-    banner: bannerLabel(),
+    banner: bannerLabel(input.isUpdate),
     introHtml,
     linesHtml: lines,
     actionsHtml: actions.join(""),

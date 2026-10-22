@@ -139,7 +139,7 @@ The owner sends these from the estimate screen. View opens `download-estimate-pd
 | Updated text | Customer | SMS | Hi {name}, your cleaning estimate{total} has been updated. View it here: {pdf url} | `send-estimate-sms` |
 | Customer accepts | Owner | Email | Estimate accepted — {number} | `accept-estimate` |
 
-Estimate SMS pastes the URL the app already built. The email builds its own PDF link.
+Estimate SMS pastes the URL the app already built. The email builds its own PDF link. An update uses the same card with the banner ESTIMATE UPDATE. The customer gets Accept Estimate and View Estimate. The owner gets Download PDF. The customer text says "{company} has updated your estimate." The owner text says "Your estimate for {client} has been successfully updated."
 
 ### Quick quotes
 
@@ -172,26 +172,60 @@ The invoice email has Pay (`/invoice/payment/:token`) and Download PDF (`downloa
 
 ### Jobs
 
+Stored statuses: `draft`, `scheduled`, `upcoming`, `today`, `ongoing`, `missed`, `completed`, `cancelled`. The dashboard and the phone app show both `upcoming` and `today` as Upcoming. `ongoing` is a stored value the apps show as Today. Nothing in the current flow writes `jobs.status = ongoing`.
+
+#### How the status changes
+
+| From | To | What does it |
+|---|---|---|
+| — | `draft` | Create, on the dashboard or the phone. Also the row created when an estimate or walkthrough is converted. |
+| `draft` | `upcoming` | Owner publishes. The app updates the status to upcoming. If the date is after today in the owner's timezone, it stays `upcoming`. |
+| `draft` | `today` | Same publish, when the date is today. A before-update trigger rewrites upcoming/today/missed from the date. |
+| `scheduled` | `upcoming` or `today` | A future visit of a recurring series. `refresh_job_temporal_statuses` runs every 30 minutes and moves it when its date arrives. |
+| `upcoming` | `today` | That same 30-minute job, once the date is today. |
+| `upcoming` or `today` | `missed` | That same job, once the start is at least 6 hours in the past, or the date has passed. |
+| any except `completed` and `cancelled` | `completed` | Owner marks it complete, or the employee clocks out of that job (`employee-clock-action`). |
+| active statuses | `cancelled` | Owner cancels. A recurring cancel goes through `manage_recurring_job` / `cancel_recurring_job_series`. |
+| — | `ongoing` | Not used. Clock-in sets the time entry to `in_progress` and leaves the job status alone. `ongoing` is written only on `route_appointments`, and only when the time entry is tied to that appointment. |
+
+Publishing a future job is `draft` → `upcoming`. Publishing a job for today is `draft` → `today`. Creating the row does not publish it.
+
+#### Who gets email and SMS
+
+`on_job_status_change_send_email` runs after `jobs.status` changes and calls `dispatch_job_status_email`, which posts to `send-job-status-emails`. The post uses `app.settings.service_role_key` and falls back to an empty token. `send-job-status-emails` is not set to `verify_jwt = false`. A rejected call still leaves the new status saved. Cancel also calls that function from the app, so a cancel can send the same email twice.
+
+The function skips `upcoming` → `today`, `today` → `missed`, and `upcoming` → `missed`. Those are the automatic date moves, so the client and the owner get no status email for them.
+
 | When | To | Channel | Subject or text | Function |
 |---|---|---|---|---|
-| Status becomes upcoming, first time | Customer | Email | Your job has been confirmed — {company} | `send-job-status-emails` |
-| Status becomes upcoming again | Customer | Email | Your job has been rescheduled — {company} | `send-job-status-emails` |
-| Completed | Customer | Email | Your job has been completed — {company}. May include View invoice and pay | `send-job-status-emails` |
-| Cancelled | Customer | Email | Your job has been cancelled — {company} | `send-job-status-emails` |
-| Any status change | Owner | Email | Job {number} status {status} — {company}, or Job {number} completed | `send-job-status-emails` |
-| Assigned, or cancelled | Employee | Email | Job assigned — {number} / Job cancelled — {number} | `send-job-status-emails` |
-| Confirmed | Customer | SMS | {company}: Hi {name}, your job is confirmed for {date}. Address: {address} | `send-job-status-sms` |
-| Rescheduled | Customer | SMS | {company}: Hi {name}, your job has been rescheduled to {date}. Address: {address} | `send-job-status-sms` |
-| Completed | Customer | SMS | {company}: Hi {name}, your job has been completed. Thank you! Payment link when an invoice exists | `send-job-status-sms` |
-| Cancelled | Customer | SMS | {company}: Hi {name}, your job scheduled for {date} has been cancelled. | `send-job-status-sms` |
-| Estimate or walkthrough becomes a job | Owner | Email | Job created from {source} — {number} | `send-job-conversion-emails` |
-| That conversion | Customer | Email | Your {source} was moved to a job with {company} | `send-job-conversion-emails` |
-| Day before and day of, 9:00 UTC | Customer | Email | Recordatorio: tu trabajo es mañana/hoy — {company} | `send-job-reminders` |
-| Day before and day of, 9:00 UTC | Employee | Email | Recordatorio de trabajo — mañana/hoy — {number} | `send-job-reminders` |
-| Assigned, rescheduled, or cancelled | Employee | Email | Job assigned / Job rescheduled / Job cancelled — {number} | `notify-job-employees` |
-| Those events, if push is unavailable | Employee | SMS | {company}: You've been assigned {job} / rescheduled / cancelled | `notify-job-employees` |
+| Status becomes `upcoming` from `draft` or `scheduled` | Customer | Email | Your job has been confirmed — {company} | `send-job-status-emails` |
+| Status becomes `upcoming` from `upcoming`, `today`, `ongoing`, or `missed` | Customer | Email | Your job has been rescheduled — {company} | `send-job-status-emails` |
+| `completed` | Customer | Email | Your job has been completed — {company}. May include View invoice and pay | `send-job-status-emails` |
+| `cancelled` | Customer | Email | Your job has been cancelled — {company} | `send-job-status-emails` |
+| Any status change the function does not skip | Owner | Email | Job {number} status {status} — {company}, or Job {number} completed | `send-job-status-emails` |
+| `upcoming` or `cancelled` | Employee | Email | Job assigned — {number} / Job cancelled — {number} | `send-job-status-emails` |
+| Estimate or walkthrough is linked to the new draft | Owner | Email | Job created from {source} — {number} | `send-job-conversion-emails` |
+| That link | Customer | Email | Your {source} was moved to a job with {company} | `send-job-conversion-emails` |
+| Day before, job still `upcoming`, cron at 9:00 UTC | Customer | Email | Recordatorio: tu trabajo es mañana — {company} | `send-job-reminders` |
+| Day of, job status `today`, same cron | Customer | Email | Recordatorio: tu trabajo es hoy — {company} | `send-job-reminders` |
+| Those two reminders | Employee | Email | Recordatorio de trabajo — mañana/hoy — {number} | `send-job-reminders` |
+| Insert of a non-draft job that already has employees, or the employee list, date, or time changes | Employee | Push, then email | Job assigned / Job rescheduled — {number} | `notify-job-employees` |
+| Status becomes `cancelled` and employees are assigned | Employee | Push, then email | Job cancelled — {number} | `notify-job-employees` |
+| Those employee events, when push is unavailable | Employee | SMS | {company}: You've been assigned {job} / rescheduled / cancelled | `notify-job-employees` |
 
-Job reminder subjects are in Spanish. Other job mail is in English.
+The customer email is sent only when `jobs.client_email` is set and `client_notification_channel` is null or `email`. `sms` and `both` skip the customer email. Neither app writes that column, so it stays null and the customer email is allowed.
+
+`send-job-status-sms` can text the customer for `upcoming`, `cancelled`, and `completed`. No screen calls it. There is no owner SMS for a job status change, and no customer SMS from the status trigger.
+
+`today`, `missed`, and `ongoing` do not email the customer. `today` still emails the owner when the change is not one of the three skipped automatic moves. `upcoming` → `today` and the missed moves send nothing.
+
+The conversion email goes out when `estimates.job_id` or `walkthroughs.job_id` is set, while the job is still a draft. Publishing that job later still sends the confirmation email.
+
+Reminders do not email the owner. Subjects are Spanish. Other job mail is English.
+
+Each send writes a line to the edge-runtime log starting with `[job-message]`. `origin` is `converted_estimate` when the job has `estimate_id`, `converted_walkthrough` when it has `walkthrough_id`, and `created` when the owner made the job directly. Filter with `docker logs supabase_edge_runtime_euydrdzayvjahstvmwoj 2>&1 | grep job-message`.
+
+Clock-in writes an in-app notification for the owner (`job_started`) and does not change the job status. `send-clock-notifications` emails the owner and the customer only when the time entry is linked to a `route_appointments` row. A job clock-in from the employee app sends `job_id` and does not take that path. Clock-out sets the job to `completed`, which is a normal status email.
 
 ### Schedule
 

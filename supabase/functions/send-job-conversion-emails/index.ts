@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { logJobMessage } from "../_shared/jobMessageLog.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -26,6 +27,8 @@ type JobRow = {
   property_state: string | null;
   property_zip: string | null;
   total_amount: number | null;
+  estimate_id?: string | null;
+  walkthrough_id?: string | null;
 };
 
 async function sendEmailViaSMTP(
@@ -204,7 +207,20 @@ serve(async (req) => {
       `<p>${sourceLabel.charAt(0).toUpperCase() + sourceLabel.slice(1)} converted to job for <strong>${clientName}</strong>.</p>${details}`,
     );
 
+    const origin = sourceType === "estimate" ? "converted_estimate" : "converted_walkthrough";
+    const base = {
+      jobId,
+      jobNumber: row.job_number,
+      origin,
+      estimateId: row.estimate_id ?? null,
+      walkthroughId: row.walkthrough_id ?? null,
+      sourceType,
+      sourceId,
+      channel: "email",
+    };
+
     await sendEmailViaSMTP(ownerEmail, ownerSubject, ownerBody, ownerEmail);
+    logJobMessage("conversion_email", { ...base, audience: "owner", result: "sent" });
 
     if (clientEmail) {
       const clientSubject = `Your ${sourceLabel} was moved to a job with ${companyName}`;
@@ -213,13 +229,17 @@ serve(async (req) => {
         `<p>Hi ${clientName},</p><p>Your ${sourceLabel} was converted to a job in our system.</p>${details}`,
       );
       await sendEmailViaSMTP(clientEmail, clientSubject, clientBody, ownerEmail);
+      logJobMessage("conversion_email", { ...base, audience: "client", result: "sent" });
+    } else {
+      logJobMessage("conversion_email", { ...base, audience: "client", result: "skipped", reason: "no_client_email" });
     }
 
-    return new Response(JSON.stringify({ success: true }), {
+    return new Response(JSON.stringify({ success: true, origin }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err: unknown) {
+    logJobMessage("conversion_email", { result: "error", reason: (err as Error).message });
     return new Response(JSON.stringify({ error: (err as Error).message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

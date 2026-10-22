@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendPushToEmployees, type PushMessage } from "../_shared/fcm.ts";
+import { jobOrigin, logJobMessage } from "../_shared/jobMessageLog.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -28,6 +29,8 @@ interface JobRow {
   property_state: string | null;
   property_zip: string | null;
   assigned_employees: unknown;
+  estimate_id?: string | null;
+  walkthrough_id?: string | null;
 }
 
 interface EmployeeRow {
@@ -433,6 +436,33 @@ serve(async (req) => {
     const smsSent = deliveryResults.filter((r) => r.sms).length;
     const emailsSent = deliveryResults.filter((r) => r.email).length;
     const inAppCreated = deliveryResults.filter((r) => r.inApp).length;
+    const origin = jobOrigin(row);
+    logJobMessage("employee_sms", {
+      jobId: row.id,
+      jobNumber: row.job_number,
+      origin,
+      estimateId: row.estimate_id ?? null,
+      walkthroughId: row.walkthrough_id ?? null,
+      eventType,
+      audience: "employee",
+      channel: "sms",
+      result: smsSent > 0 ? "sent" : "skipped",
+      reason: smsSent > 0 ? undefined : "no_sms_sent",
+      count: smsSent,
+    });
+    logJobMessage("employee_email", {
+      jobId: row.id,
+      jobNumber: row.job_number,
+      origin,
+      estimateId: row.estimate_id ?? null,
+      walkthroughId: row.walkthrough_id ?? null,
+      eventType,
+      audience: "employee",
+      channel: "email",
+      result: emailsSent > 0 ? "sent" : "skipped",
+      reason: emailsSent > 0 ? undefined : "no_email_sent",
+      count: emailsSent,
+    });
 
     return new Response(
       JSON.stringify({

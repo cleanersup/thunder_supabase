@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import * as Sentry from "npm:@sentry/deno";
 import { sendPushToEmployees } from "../_shared/fcm.ts";
+import { jobOrigin, logJobMessage } from "../_shared/jobMessageLog.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -31,6 +32,8 @@ type JobRow = {
   property_zip: string | null;
   assigned_employees: string[] | unknown;
   status: string;
+  estimate_id?: string | null;
+  walkthrough_id?: string | null;
 };
 
 type EmployeeRow = {
@@ -228,7 +231,20 @@ async function processJobReminder(
     .eq("type", reminderType)
     .maybeSingle();
 
-  if (alreadySent) return false;
+  const base = {
+    jobId: job.id,
+    jobNumber: job.job_number,
+    origin: jobOrigin(job),
+    estimateId: job.estimate_id ?? null,
+    walkthroughId: job.walkthrough_id ?? null,
+    reminderType,
+    channel: "email",
+  };
+
+  if (alreadySent) {
+    logJobMessage("reminder_email", { ...base, audience: "client", result: "skipped", reason: "already_sent" });
+    return false;
+  }
 
   const employeeIds = normalizeEmployeeIds(job.assigned_employees);
   if (employeeIds.length > 0) {
@@ -241,6 +257,7 @@ async function processJobReminder(
       if (!employee.email) continue;
       const mail = buildEmployeeReminderEmail(job, employee, companyName, reminderType, timezone);
       await sendEmailViaSMTP(employee.email, mail.subject, mail.html);
+      logJobMessage("reminder_email", { ...base, audience: "employee", employeeId: employee.id, result: "sent" });
     }
 
     // Also push-notify assigned employees (best-effort; email is still the record of truth).
@@ -260,6 +277,9 @@ async function processJobReminder(
   if (job.client_email) {
     const clientMail = buildClientReminderEmail(job, companyName, reminderType, timezone);
     await sendEmailViaSMTP(job.client_email, clientMail.subject, clientMail.html);
+    logJobMessage("reminder_email", { ...base, audience: "client", result: "sent" });
+  } else {
+    logJobMessage("reminder_email", { ...base, audience: "client", result: "skipped", reason: "no_client_email" });
   }
 
   await supabase.from("job_notifications_sent").insert({

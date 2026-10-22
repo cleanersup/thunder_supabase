@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { jobOrigin, logJobMessage } from "../_shared/jobMessageLog.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -28,6 +29,8 @@ type JobRow = {
   property_state: string | null;
   property_zip: string | null;
   invoice_ids: string[] | null;
+  estimate_id?: string | null;
+  walkthrough_id?: string | null;
 };
 
 const ALLOWED_STATUSES = new Set(["upcoming", "cancelled", "completed"]);
@@ -136,13 +139,6 @@ serve(async (req) => {
       });
     }
 
-    if (!ALLOWED_STATUSES.has(newStatus)) {
-      return new Response(JSON.stringify({ success: true, skipped: "status_not_notifiable" }), {
-        status: 200,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
@@ -154,8 +150,30 @@ serve(async (req) => {
       .single();
 
     if (jobError || !job) {
+      logJobMessage("status_sms", { jobId, newStatus, audience: "client", channel: "sms", result: "skipped", reason: "job_not_found" });
       return new Response(JSON.stringify({ error: "Job not found" }), {
         status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const origin = jobOrigin(job);
+    const base = {
+      jobId,
+      jobNumber: job.job_number,
+      origin,
+      estimateId: job.estimate_id ?? null,
+      walkthroughId: job.walkthrough_id ?? null,
+      previousStatus: previousStatus || "",
+      newStatus,
+      audience: "client",
+      channel: "sms",
+    };
+
+    if (!ALLOWED_STATUSES.has(newStatus)) {
+      logJobMessage("status_sms", { ...base, result: "skipped", reason: "status_not_notifiable" });
+      return new Response(JSON.stringify({ success: true, skipped: "status_not_notifiable", origin }), {
+        status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -213,11 +231,13 @@ serve(async (req) => {
       throw new Error(data.message || data.error_message || "Failed to send SMS");
     }
 
-    return new Response(JSON.stringify({ success: true, sid: data.sid }), {
+    logJobMessage("status_sms", { ...base, result: "sent" });
+    return new Response(JSON.stringify({ success: true, sid: data.sid, origin }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err: unknown) {
+    logJobMessage("status_sms", { result: "error", reason: (err as Error).message });
     return new Response(JSON.stringify({ error: (err as Error).message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
