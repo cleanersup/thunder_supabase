@@ -147,7 +147,6 @@ function requestCardHtml(input: {
   greetingName: string;
   timezone: string;
   conversionTarget?: RequestConversionTarget;
-  logoUrl?: string | null;
 }): string {
   const preferred = input.booking.preferred_date
     ? formatDateOnlyLong(input.booking.preferred_date, input.timezone)
@@ -162,7 +161,6 @@ function requestCardHtml(input: {
     serviceType: formatRequestServiceType(input.booking.service_type),
     preferredDate: !preferred || preferred === "N/A" ? "" : preferred,
     timePreferred: formatTimePreferred(input.booking.time_preference),
-    logoUrl: input.logoUrl,
     contact: {
       name: input.booking.lead_name,
       email: input.booking.email,
@@ -265,7 +263,7 @@ serve(async (req) => {
     const b = booking as BookingRow;
     const { data: profile } = await supabase
       .from("profiles")
-      .select("first_name, last_name, company_name, company_email, company_logo, timezone")
+      .select("first_name, last_name, company_name, company_email, timezone")
       .eq("user_id", b.business_owner_id)
       .maybeSingle();
     const companyName = profile?.company_name || "Your cleaning provider";
@@ -322,7 +320,6 @@ serve(async (req) => {
           greetingName: ownerFirst,
           timezone: userTimezone,
           conversionTarget,
-          logoUrl: profile?.company_logo ?? null,
         });
         break;
       case "cancelled":
@@ -371,7 +368,6 @@ serve(async (req) => {
             companyName,
             greetingName: personFirstName(b.lead_name),
             timezone: userTimezone,
-            logoUrl: profile?.company_logo ?? null,
           });
           ownerHtml = requestCardHtml({
             kind: "new",
@@ -379,7 +375,6 @@ serve(async (req) => {
             companyName,
             greetingName: ownerFirst,
             timezone: userTimezone,
-            logoUrl: profile?.company_logo ?? null,
           });
         } else {
           leadSubject = `Request restored — ${companyName}`;

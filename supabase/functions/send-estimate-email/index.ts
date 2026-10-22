@@ -261,7 +261,7 @@ const handler = async (req: Request): Promise<Response> => {
             // Now get the company_email and timezone from profiles table
             const { data: profile, error: profileError } = await supabaseClient
               .from('profiles')
-              .select('first_name, last_name, company_name, company_email, company_phone, company_address, company_apt_suite, company_city, company_state, company_zip, company_logo, timezone')
+              .select('first_name, last_name, company_name, company_email, company_phone, company_address, company_apt_suite, company_city, company_state, company_zip, timezone')
               .eq('user_id', user.id)
               .single();
 
@@ -350,7 +350,6 @@ const handler = async (req: Request): Promise<Response> => {
         audience: 'client',
         moment: 'sent',
         companyName,
-        logoUrl: ownerProfile?.company_logo ?? null,
         greetingName: clientFirst,
         clientFirstName: clientFirst,
         documentNumber,
@@ -367,7 +366,6 @@ const handler = async (req: Request): Promise<Response> => {
         audience: 'owner',
         moment: 'sent',
         companyName,
-        logoUrl: ownerProfile?.company_logo ?? null,
         greetingName: personFirstName(ownerName),
         clientFirstName: clientFirst,
         documentNumber,

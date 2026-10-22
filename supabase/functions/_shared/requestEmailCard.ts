@@ -24,7 +24,6 @@ export interface RequestEmailInput {
   preferredDate: string;
   timePreferred: string;
   contact: DocumentEmailContact;
-  logoUrl?: string | null;
 }
 
 export function formatTimePreferred(value: string | null | undefined): string {
@@ -109,7 +108,5 @@ ${bodyParagraphs(input)}`;
     introHtml,
     linesHtml: lines,
     actionsHtml: "",
-    companyName: input.companyName,
-    logoUrl: input.logoUrl,
   });
 }

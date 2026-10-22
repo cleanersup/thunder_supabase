@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.76.1';
 import * as Sentry from "npm:@sentry/deno";
+import { drawInitialsLogo } from "../_shared/pdfInitialsLogo.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -473,10 +474,15 @@ async function generateEstimatePDF(estimate: any, profile: any): Promise<Uint8Ar
 
   const logoSize = 22;
   const logoData = await loadLogoForPdf(profile?.company_logo);
+  let drewLogo = false;
   if (logoData) {
-    try { doc.addImage(logoData.data, logoData.format, margin, y, logoSize, logoSize); } catch { /* ignore */ }
+    try {
+      doc.addImage(logoData.data, logoData.format, margin, y, logoSize, logoSize);
+      drewLogo = true;
+    } catch { /* a logo the PDF library cannot draw falls through to initials */ }
   }
-  const textX = margin + (logoData ? logoSize + 4 : 0);
+  if (!drewLogo) drewLogo = drawInitialsLogo(doc, margin, y, logoSize, companyName);
+  const textX = margin + (drewLogo ? logoSize + 4 : 0);
   doc.setTextColor(0, 0, 0);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(16);

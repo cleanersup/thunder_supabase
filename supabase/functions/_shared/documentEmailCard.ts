@@ -32,36 +32,11 @@ export interface DocumentEmailInput {
   acceptUrl: string | null;
   trackingPixelUrl?: string | null;
   isUpdate?: boolean;
-  /** Company logo URL. When empty, the card shows initials from the company name. */
-  logoUrl?: string | null;
 }
 
 export const EMAIL_NAVY = "#1e3a8a";
 export const EMAIL_GREEN = "#239445";
 const PAGE = "#e6e6e6";
-
-/** First letter of the first word and first letter of the last word. "Pedros Cleaning" → "PC". */
-export function companyInitials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter((part) => /[A-Za-z0-9]/.test(part));
-  const letter = (part: string) => (part.match(/[A-Za-z0-9]/)?.[0] ?? "").toUpperCase();
-  if (parts.length === 0) return "";
-  if (parts.length === 1) {
-    return (parts[0].match(/[A-Za-z0-9]/g) ?? []).slice(0, 2).join("").toUpperCase();
-  }
-  return `${letter(parts[0])}${letter(parts[parts.length - 1])}`;
-}
-
-function emailBrandMark(companyName: string, logoUrl: string | null | undefined): string {
-  const src = String(logoUrl || "").trim();
-  const initials = companyInitials(companyName);
-  const inner = src
-    ? `<img src="${escapeHtml(src)}" width="72" height="72" alt="" style="display:block;width:72px;height:72px;border-radius:50%;object-fit:cover;" />`
-    : `<div style="width:72px;height:72px;border-radius:50%;background-color:#e8eef8;color:${EMAIL_NAVY};font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;line-height:72px;text-align:center;">${escapeHtml(initials)}</div>`;
-  if (!src && !initials) return "";
-  return `<table role="presentation" align="center" cellpadding="0" cellspacing="0" style="margin:0 auto 18px auto;">
-<tr><td align="center" valign="middle">${inner}</td></tr>
-</table>`;
-}
 
 export function escapeHtml(value: string): string {
   return value
@@ -163,8 +138,6 @@ export function renderBrandedEmailCard(input: {
   linesHtml: string;
   actionsHtml: string;
   trackingPixelUrl?: string | null;
-  companyName?: string;
-  logoUrl?: string | null;
 }): string {
   const year = new Date().getFullYear();
   const pixel = input.trackingPixelUrl
@@ -198,7 +171,6 @@ ${input.actionsHtml}
 </tr>
 <tr>
 <td style="padding:28px 32px 8px 32px;font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;">
-${emailBrandMark(input.companyName ?? "", input.logoUrl)}
 ${input.introHtml}
 ${input.linesHtml}
 </td>
@@ -251,7 +223,5 @@ export function renderDocumentEmail(input: DocumentEmailInput): string {
     linesHtml: lines,
     actionsHtml: actions.join(""),
     trackingPixelUrl: input.trackingPixelUrl,
-    companyName: input.companyName,
-    logoUrl: input.logoUrl,
   });
 }

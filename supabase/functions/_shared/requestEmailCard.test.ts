@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { companyInitials } from "./documentEmailCard.ts";
 import {
   formatRequestServiceType,
   formatTimePreferred,
@@ -72,22 +71,6 @@ test("owner converted request names an estimate and is owner only copy", () => {
   assert.match(html, /view the job details/);
   assert.match(html, /<span style="font-weight:700;">Name :<\/span> Pedro Cisneros/);
   assert.doesNotMatch(html, /a Estimate/);
-});
-
-test("missing company logo uses the first and last initials", () => {
-  const html = renderRequestEmail({ ...base, kind: "received", greetingName: "Pedro" });
-  assert.equal(companyInitials("Pedros Cleaning"), "PC");
-  assert.match(html, />CC</);
-  assert.doesNotMatch(html, /<img src="https:\/\/logo/);
-
-  const withLogo = renderRequestEmail({
-    ...base,
-    kind: "received",
-    greetingName: "Pedro",
-    logoUrl: "https://logo.example/mark.png",
-  });
-  assert.match(withLogo, /src="https:\/\/logo\.example\/mark\.png"/);
-  assert.doesNotMatch(withLogo, />CC</);
 });
 
 test("request field labels", () => {

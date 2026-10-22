@@ -208,7 +208,7 @@ serve(async (req) => {
       // Fetch company profile
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select('first_name, last_name, company_name, company_email, company_phone, company_address, company_apt_suite, company_city, company_state, company_zip, company_logo, timezone')
+        .select('first_name, last_name, company_name, company_email, company_phone, company_address, company_apt_suite, company_city, company_state, company_zip, timezone')
         .eq('user_id', invoice.user_id)
         .single();
 
@@ -265,7 +265,6 @@ serve(async (req) => {
         dueDate: dueDateFormatted === 'N/A' ? '' : dueDateFormatted,
         serviceType: String(invoice.service_type || ''),
         pdfUrl,
-        logoUrl: profile.company_logo || null,
       };
 
       // Paid confirmation (client + owner). Stripe and manual payment call this with isPaymentConfirmation.

@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.76.1';
 import * as Sentry from "npm:@sentry/deno";
 import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
+import { drawInitialsLogo } from "../_shared/pdfInitialsLogo.ts";
 import { calculateInvoiceTotals } from "../_shared/invoiceCalculations.ts";
 
 const corsHeaders = {
@@ -79,16 +80,21 @@ async function generateInvoicePDF(invoice: any, profile: any): Promise<Uint8Arra
   y += 16;
 
   const logoSize = 22;
-  const logo = await loadLogoForPdf(profile?.company_logo);
-  if (logo) {
-    try { doc.addImage(logo.data, logo.format, margin, y, logoSize, logoSize); } catch { /* ignore */ }
-  }
   const companyName = profile?.company_name || '';
+  const logo = await loadLogoForPdf(profile?.company_logo);
+  let drewLogo = false;
+  if (logo) {
+    try {
+      doc.addImage(logo.data, logo.format, margin, y, logoSize, logoSize);
+      drewLogo = true;
+    } catch { /* a logo the PDF library cannot draw falls through to initials */ }
+  }
+  if (!drewLogo) drewLogo = drawInitialsLogo(doc, margin, y, logoSize, companyName);
   const companyStreet = [profile?.company_address, profile?.company_apt_suite].filter(Boolean).join(' ');
   const locality = [profile?.company_city, profile?.company_state, profile?.company_zip].filter(Boolean).join(' , ');
   const phoneStr = formatSheetPhone(profile?.company_phone || '');
   const emailStr = profile?.company_email || '';
-  const textX = margin + (logo ? logoSize + 4 : 0);
+  const textX = margin + (drewLogo ? logoSize + 4 : 0);
   doc.setTextColor(0, 0, 0);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(16);
