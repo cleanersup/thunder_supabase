@@ -1,5 +1,20 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { personFirstName } from "../_shared/documentEmailCard.ts";
+import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
+import {
+  clientJobConfirmedSms,
+  employeeJobAssignedSms,
+  formatJobClock,
+  isJobConfirmation,
+  jobFrequencyLabel,
+  jobHasDeposit,
+  jobPropertyAddress,
+  jobServiceLabel,
+  ownerJobConfirmedSms,
+  renderJobNoticeEmail,
+  type JobNotice,
+} from "../_shared/jobConfirmationCard.ts";
 import { jobOrigin, logJobMessage } from "../_shared/jobMessageLog.ts";
 
 const corsHeaders = {
@@ -36,6 +51,12 @@ type JobRow = {
   property_zip: string | null;
   assigned_employees: string[] | unknown;
   invoice_ids: string[] | null;
+  client_phone: string | null;
+  job_type: string | null;
+  recurring_frequency: string | null;
+  deposit_required: boolean | null;
+  deposit_amount: number | null;
+  deposit_invoice_id: string | null;
   estimate_id?: string | null;
   walkthrough_id?: string | null;
 };
@@ -45,6 +66,7 @@ type EmployeeRow = {
   first_name: string;
   last_name: string;
   email: string | null;
+  phone: string | null;
 };
 
 const EMPLOYEE_NOTIFY_STATUSES = new Set(["upcoming", "cancelled"]);
@@ -375,6 +397,88 @@ async function resolveInvoicePaymentLink(
   return `${publicAppUrl}/invoice/payment/${invoice.payment_token || invoice.id}`;
 }
 
+async function resolveDepositPaymentLink(
+  supabase: ReturnType<typeof createClient>,
+  depositInvoiceId: string | null | undefined,
+): Promise<string | null> {
+  if (!depositInvoiceId) return null;
+  const { data: invoice } = await supabase
+    .from("invoices")
+    .select("id, payment_token")
+    .eq("id", depositInvoiceId)
+    .maybeSingle();
+  if (!invoice) return null;
+  const publicAppUrl = Deno.env.get("PUBLIC_APP_URL") ||
+    Deno.env.get("APP_URL") ||
+    "https://app.staging.thunderpro.co";
+  return `${publicAppUrl}/invoice/payment/${invoice.payment_token || invoice.id}`;
+}
+
+function confirmationNotice(job: JobRow, companyName: string, timezone: string, payDepositUrl: string | null): JobNotice {
+  return {
+    companyName,
+    clientName: job.client_name || "",
+    clientEmail: job.client_email || "",
+    clientPhone: job.client_phone || "",
+    address: jobPropertyAddress({
+      street: job.property_street,
+      apt: job.property_apt,
+      city: job.property_city,
+      state: job.property_state,
+      zip: job.property_zip,
+    }),
+    dateLabel: formatDateOnlyLong(job.scheduled_date, timezone),
+    startTime: formatJobClock(job.start_time),
+    endTime: formatJobClock(job.end_time),
+    serviceType: jobServiceLabel(job.service_type),
+    frequencyLabel: jobFrequencyLabel(job.job_type, job.recurring_frequency),
+    depositRequired: !!job.deposit_required,
+    depositAmount: job.deposit_amount,
+    payDepositUrl,
+    pdfUrl: null,
+  };
+}
+
+function wantsClientEmail(channel: ClientChannel | undefined): boolean {
+  return channel !== "sms";
+}
+
+function wantsClientSms(channel: ClientChannel | undefined): boolean {
+  return channel !== "email";
+}
+
+function normalizePhoneNumber(phone: string): string {
+  const cleaned = phone.replace(/[^\d+]/g, "");
+  if (cleaned.startsWith("+1")) return cleaned;
+  const digits = cleaned.startsWith("+") ? cleaned.slice(1) : cleaned;
+  return `+1${digits}`;
+}
+
+async function sendSms(toPhone: string, bodyText: string): Promise<void> {
+  const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID");
+  const authToken = Deno.env.get("TWILIO_AUTH_TOKEN");
+  const twilioPhone = Deno.env.get("TWILIO_PHONE_NUMBER");
+  if (!accountSid || !authToken || !twilioPhone) {
+    throw new Error("Missing Twilio credentials");
+  }
+  const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: "Basic " + btoa(`${accountSid}:${authToken}`),
+    },
+    body: new URLSearchParams({
+      To: normalizePhoneNumber(toPhone),
+      From: twilioPhone,
+      Body: bodyText,
+    }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Failed to send SMS");
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -439,7 +543,7 @@ serve(async (req) => {
 
     const { data: profile } = await supabase
       .from("profiles")
-      .select("company_name, timezone")
+      .select("company_name, timezone, first_name, company_phone")
       .eq("user_id", row.user_id)
       .maybeSingle();
 
@@ -457,6 +561,89 @@ serve(async (req) => {
 
     const ownerEmail = authUser.user.email;
     const sent: string[] = [];
+
+    if (isJobConfirmation(prev, newStatus)) {
+      const payDepositUrl = jobHasDeposit(row.deposit_required, row.deposit_amount)
+        ? await resolveDepositPaymentLink(supabase, row.deposit_invoice_id)
+        : null;
+      const notice = confirmationNotice(row, companyName, timezone, payDepositUrl);
+      const ownerFirst = personFirstName(profile?.first_name) || "there";
+      const ownerMail = renderJobNoticeEmail("owner", ownerFirst, notice);
+      await sendEmailViaSMTP(ownerEmail, ownerMail.subject, ownerMail.html, ownerEmail);
+      sent.push("owner");
+      logJobMessage("status_email", { ...base, audience: "owner", channel: "email", result: "sent", template: "job_confirmed" });
+
+      if (profile?.company_phone) {
+        try {
+          await sendSms(profile.company_phone, ownerJobConfirmedSms(notice, ownerFirst));
+          sent.push("owner-sms");
+          logJobMessage("status_sms", { ...base, audience: "owner", channel: "sms", result: "sent", template: "job_confirmed" });
+        } catch (smsError) {
+          logJobMessage("status_sms", { ...base, audience: "owner", channel: "sms", result: "error", reason: (smsError as Error).message });
+        }
+      } else {
+        logJobMessage("status_sms", { ...base, audience: "owner", channel: "sms", result: "skipped", reason: "no_owner_phone" });
+      }
+
+      if (!row.client_email) {
+        logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "skipped", reason: "no_client_email" });
+      } else if (!wantsClientEmail(clientChannel)) {
+        logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "skipped", reason: "client_channel", clientChannel: clientChannel ?? null });
+      } else {
+        const clientMail = renderJobNoticeEmail("client", personFirstName(row.client_name) || "there", notice);
+        await sendEmailViaSMTP(row.client_email, clientMail.subject, clientMail.html, ownerEmail);
+        sent.push("client");
+        logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "sent", template: "job_confirmed" });
+      }
+
+      if (!row.client_phone) {
+        logJobMessage("status_sms", { ...base, audience: "client", channel: "sms", result: "skipped", reason: "no_client_phone" });
+      } else if (!wantsClientSms(clientChannel)) {
+        logJobMessage("status_sms", { ...base, audience: "client", channel: "sms", result: "skipped", reason: "client_channel", clientChannel: clientChannel ?? null });
+      } else {
+        try {
+          await sendSms(row.client_phone, clientJobConfirmedSms(notice));
+          sent.push("client-sms");
+          logJobMessage("status_sms", { ...base, audience: "client", channel: "sms", result: "sent", template: "job_confirmed" });
+        } catch (smsError) {
+          logJobMessage("status_sms", { ...base, audience: "client", channel: "sms", result: "error", reason: (smsError as Error).message });
+        }
+      }
+
+      // Publishing a draft already texts and emails employees from notify-job-employees.
+      if (prev !== "draft") {
+        const employeeIds = normalizeEmployeeIds(row.assigned_employees);
+        if (employeeIds.length > 0) {
+          const { data: employees } = await supabase
+            .from("employees")
+            .select("id, first_name, last_name, email, phone")
+            .in("id", employeeIds);
+          for (const employee of (employees || []) as EmployeeRow[]) {
+            const employeeFirst = personFirstName(employee.first_name) || "there";
+            if (employee.email) {
+              const mail = renderJobNoticeEmail("employee", employeeFirst, notice);
+              await sendEmailViaSMTP(employee.email, mail.subject, mail.html, ownerEmail);
+              sent.push(`employee:${employee.id}`);
+              logJobMessage("status_email", { ...base, audience: "employee", channel: "email", employeeId: employee.id, result: "sent", template: "job_assigned" });
+            }
+            if (employee.phone) {
+              try {
+                await sendSms(employee.phone, employeeJobAssignedSms(notice, employeeFirst));
+                sent.push(`employee-sms:${employee.id}`);
+                logJobMessage("status_sms", { ...base, audience: "employee", channel: "sms", employeeId: employee.id, result: "sent", template: "job_assigned" });
+              } catch (smsError) {
+                logJobMessage("status_sms", { ...base, audience: "employee", channel: "sms", employeeId: employee.id, result: "error", reason: (smsError as Error).message });
+              }
+            }
+          }
+        }
+      }
+
+      return new Response(JSON.stringify({ success: true, sent, origin, template: "job_confirmed" }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const ownerMail = buildOwnerEmail(row, companyName, prev, newStatus);
     await sendEmailViaSMTP(ownerEmail, ownerMail.subject, ownerMail.html, ownerEmail);

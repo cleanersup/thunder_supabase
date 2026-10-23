@@ -192,32 +192,38 @@ Publishing a future job is `draft` → `upcoming`. Publishing a job for today is
 
 #### Who gets email and SMS
 
-`on_job_status_change_send_email` runs after `jobs.status` changes and calls `dispatch_job_status_email`, which posts to `send-job-status-emails`. The post uses `app.settings.service_role_key` and falls back to an empty token. `send-job-status-emails` is not set to `verify_jwt = false`. A rejected call still leaves the new status saved. Cancel also calls that function from the app, so a cancel can send the same email twice.
+`on_job_status_change_send_email` runs after `jobs.status` changes and calls `dispatch_job_status_email`, which posts to `send-job-status-emails` at `http://kong:8000`. `send-job-status-emails` and `send-job-status-sms` have `verify_jwt = false`, same as the employee notification. Cancel also calls the email function from the app, so a cancel can send the same email twice.
 
 The function skips `upcoming` → `today`, `today` → `missed`, and `upcoming` → `missed`. Those are the automatic date moves, so the client and the owner get no status email for them.
 
 | When | To | Channel | Subject or text | Function |
 |---|---|---|---|---|
-| Status becomes `upcoming` from `draft` or `scheduled` | Customer | Email | Your job has been confirmed — {company} | `send-job-status-emails` |
+| Status becomes `upcoming` or `today` from `draft` or `scheduled` | Customer | Email | Your job has been confirmed — {company}. Banner JOB CONFIRMED. Pay Deposit when a deposit is required | `send-job-status-emails` |
+| That confirmation | Customer | SMS | {company}: Hi {name}, your job has been confirmed and assigned to our team | `send-job-status-emails` |
+| That confirmation | Owner | Email | The job for {client} has been confirmed — {company}. Banner JOB CONFIRMED | `send-job-status-emails` |
+| That confirmation | Owner | SMS | {company}: Hi {name}, the job for {client} has been confirmed and assigned to your team | `send-job-status-emails` |
+| Publish from `draft` with employees assigned | Employee | Email | You've been assigned a new job — {company}. Banner ASSIGNED JOB | `notify-job-employees` |
+| That publish | Employee | SMS | {company}: Hi {name}, you've been assigned a new job for {client} | `notify-job-employees` |
 | Status becomes `upcoming` from `upcoming`, `today`, `ongoing`, or `missed` | Customer | Email | Your job has been rescheduled — {company} | `send-job-status-emails` |
 | `completed` | Customer | Email | Your job has been completed — {company}. May include View invoice and pay | `send-job-status-emails` |
 | `cancelled` | Customer | Email | Your job has been cancelled — {company} | `send-job-status-emails` |
-| Any status change the function does not skip | Owner | Email | Job {number} status {status} — {company}, or Job {number} completed | `send-job-status-emails` |
-| `upcoming` or `cancelled` | Employee | Email | Job assigned — {number} / Job cancelled — {number} | `send-job-status-emails` |
+| Any other status change the function does not skip | Owner | Email | Job {number} status {status} — {company}, or Job {number} completed | `send-job-status-emails` |
+| `upcoming` that is not a first confirmation, or `cancelled` | Employee | Email | Job assigned — {number} / Job cancelled — {number} | `send-job-status-emails` |
 | Estimate or walkthrough is linked to the new draft | Owner | Email | Job created from {source} — {number} | `send-job-conversion-emails` |
 | That link | Customer | Email | Your {source} was moved to a job with {company} | `send-job-conversion-emails` |
 | Day before, job still `upcoming`, cron at 9:00 UTC | Customer | Email | Recordatorio: tu trabajo es mañana — {company} | `send-job-reminders` |
 | Day of, job status `today`, same cron | Customer | Email | Recordatorio: tu trabajo es hoy — {company} | `send-job-reminders` |
 | Those two reminders | Employee | Email | Recordatorio de trabajo — mañana/hoy — {number} | `send-job-reminders` |
-| Insert of a non-draft job that already has employees, or the employee list, date, or time changes | Employee | Push, then email | Job assigned / Job rescheduled — {number} | `notify-job-employees` |
+| Insert of a non-draft job that already has employees, or the employee list changes | Employee | Push, then email | You've been assigned a new job — {company} | `notify-job-employees` |
+| Date or start time changes on an active job | Employee | Push, then email | Job rescheduled — {number} | `notify-job-employees` |
 | Status becomes `cancelled` and employees are assigned | Employee | Push, then email | Job cancelled — {number} | `notify-job-employees` |
-| Those employee events, when push is unavailable | Employee | SMS | {company}: You've been assigned {job} / rescheduled / cancelled | `notify-job-employees` |
+| Those employee events, when the employee has a phone | Employee | SMS | Assigned uses the Thunder Crew sentence. Reschedule and cancel keep the short text | `notify-job-employees` |
 
-The customer email is sent only when `jobs.client_email` is set and `client_notification_channel` is null or `email`. `sms` and `both` skip the customer email. Neither app writes that column, so it stays null and the customer email is allowed.
+On confirmation, the customer email is sent when `jobs.client_email` is set and `client_notification_channel` is null, `email`, or `both`. The customer SMS is sent when `jobs.client_phone` is set and the channel is null, `sms`, or `both`. Neither app writes that column, so it stays null and both go out. Other statuses still email the customer only when the channel is null or `email`.
 
-`send-job-status-sms` can text the customer for `upcoming`, `cancelled`, and `completed`. No screen calls it. There is no owner SMS for a job status change, and no customer SMS from the status trigger.
+`send-job-status-sms` still texts the customer for `upcoming`, `cancelled`, and `completed`, and uses the confirmation sentence when the job is first published. The confirmation SMS itself is sent by `send-job-status-emails`, so the apps do not call the SMS function. There is no public job PDF, so the Download PDF button is left off until that file exists. Pay Deposit opens the deposit invoice payment page.
 
-`today`, `missed`, and `ongoing` do not email the customer. `today` still emails the owner when the change is not one of the three skipped automatic moves. `upcoming` → `today` and the missed moves send nothing.
+A job published for today (`draft` → `today`) uses the confirmation card. `upcoming` → `today`, `missed`, and `ongoing` do not email the customer. `upcoming` → `today` and the missed moves send nothing.
 
 The conversion email goes out when `estimates.job_id` or `walkthroughs.job_id` is set, while the job is still a draft. Publishing that job later still sends the confirmation email.
 

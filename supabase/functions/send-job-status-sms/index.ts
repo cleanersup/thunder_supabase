@@ -1,5 +1,16 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
+import {
+  clientJobConfirmedSms,
+  formatJobClock,
+  isJobConfirmation,
+  jobFrequencyLabel,
+  jobHasDeposit,
+  jobPropertyAddress,
+  jobServiceLabel,
+  type JobNotice,
+} from "../_shared/jobConfirmationCard.ts";
 import { jobOrigin, logJobMessage } from "../_shared/jobMessageLog.ts";
 
 const corsHeaders = {
@@ -29,6 +40,12 @@ type JobRow = {
   property_state: string | null;
   property_zip: string | null;
   invoice_ids: string[] | null;
+  job_type: string | null;
+  recurring_frequency: string | null;
+  deposit_required: boolean | null;
+  deposit_amount: number | null;
+  deposit_invoice_id: string | null;
+  client_email: string | null;
   estimate_id?: string | null;
   walkthrough_id?: string | null;
 };
@@ -84,6 +101,23 @@ async function resolveInvoicePaymentLink(
 
   if (!invoice) return null;
 
+  const publicAppUrl = Deno.env.get("PUBLIC_APP_URL") ||
+    Deno.env.get("APP_URL") ||
+    "https://app.staging.thunderpro.co";
+  return `${publicAppUrl}/invoice/payment/${invoice.payment_token || invoice.id}`;
+}
+
+async function resolveDepositPaymentLink(
+  supabase: ReturnType<typeof createClient>,
+  depositInvoiceId: string | null | undefined,
+): Promise<string | null> {
+  if (!depositInvoiceId) return null;
+  const { data: invoice } = await supabase
+    .from("invoices")
+    .select("id, payment_token")
+    .eq("id", depositInvoiceId)
+    .maybeSingle();
+  if (!invoice) return null;
   const publicAppUrl = Deno.env.get("PUBLIC_APP_URL") ||
     Deno.env.get("APP_URL") ||
     "https://app.staging.thunderpro.co";
@@ -170,7 +204,7 @@ serve(async (req) => {
       channel: "sms",
     };
 
-    if (!ALLOWED_STATUSES.has(newStatus)) {
+    if (!ALLOWED_STATUSES.has(newStatus) && !isJobConfirmation(previousStatus, newStatus)) {
       logJobMessage("status_sms", { ...base, result: "skipped", reason: "status_not_notifiable" });
       return new Response(JSON.stringify({ success: true, skipped: "status_not_notifiable", origin }), {
         status: 200,
@@ -193,14 +227,44 @@ serve(async (req) => {
       ? await resolveInvoicePaymentLink(supabase, row.invoice_ids)
       : null;
 
-    const message = buildClientMessage(
-      row,
-      companyName,
-      newStatus,
-      previousStatus || "",
-      timezone,
-      paymentLink,
-    );
+    let message: string;
+    if (isJobConfirmation(previousStatus, newStatus)) {
+      const payDepositUrl = jobHasDeposit(row.deposit_required, row.deposit_amount)
+        ? await resolveDepositPaymentLink(supabase, row.deposit_invoice_id)
+        : null;
+      const notice: JobNotice = {
+        companyName,
+        clientName: row.client_name || "",
+        clientEmail: row.client_email || "",
+        clientPhone,
+        address: jobPropertyAddress({
+          street: row.property_street,
+          apt: row.property_apt,
+          city: row.property_city,
+          state: row.property_state,
+          zip: row.property_zip,
+        }),
+        dateLabel: formatDateOnlyLong(row.scheduled_date, timezone),
+        startTime: formatJobClock(row.start_time),
+        endTime: formatJobClock(row.end_time),
+        serviceType: jobServiceLabel(row.service_type),
+        frequencyLabel: jobFrequencyLabel(row.job_type, row.recurring_frequency),
+        depositRequired: !!row.deposit_required,
+        depositAmount: row.deposit_amount,
+        payDepositUrl,
+        pdfUrl: null,
+      };
+      message = clientJobConfirmedSms(notice);
+    } else {
+      message = buildClientMessage(
+        row,
+        companyName,
+        newStatus,
+        previousStatus || "",
+        timezone,
+        paymentLink,
+      );
+    }
 
     const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID");
     const authToken = Deno.env.get("TWILIO_AUTH_TOKEN");

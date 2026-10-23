@@ -1,6 +1,17 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { personFirstName } from "../_shared/documentEmailCard.ts";
 import { sendPushToEmployees, type PushMessage } from "../_shared/fcm.ts";
+import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
+import {
+  employeeJobAssignedSms,
+  formatJobClock,
+  jobFrequencyLabel,
+  jobPropertyAddress,
+  jobServiceLabel,
+  renderJobNoticeEmail,
+  type JobNotice,
+} from "../_shared/jobConfirmationCard.ts";
 import { jobOrigin, logJobMessage } from "../_shared/jobMessageLog.ts";
 
 const corsHeaders = {
@@ -22,6 +33,9 @@ interface JobRow {
   service_type: string;
   scheduled_date: string;
   start_time: string | null;
+  end_time: string | null;
+  job_type: string | null;
+  recurring_frequency: string | null;
   client_name: string | null;
   property_street: string | null;
   property_apt: string | null;
@@ -114,7 +128,7 @@ function buildSmsFallback(job: JobRow, eventType: EventType, timezone: string, c
 
   switch (eventType) {
     case "assigned":
-      return `${companyName}: You've been assigned ${jobLabel} on ${when}.${addrSuffix}`;
+      return employeeJobAssignedSms(noticeFromJob(job, companyName, timezone), "there");
     case "rescheduled":
       return `${companyName}: ${jobLabel} has been rescheduled to ${when}.${addrSuffix}`;
     case "cancelled":
@@ -180,18 +194,35 @@ function buildEmployeeEmail(
     };
   }
 
+  return renderJobNoticeEmail(
+    "employee",
+    personFirstName(employee.first_name) || employeeName,
+    noticeFromJob(job, companyName, timezone),
+  );
+}
+
+function noticeFromJob(job: JobRow, companyName: string, timezone: string): JobNotice {
   return {
-    subject: `Job assigned — ${job.job_number || companyName}`,
-    html: wrapEmail(
-      "Job assignment",
-      `<p>Hi ${employeeName},</p>
-      <p>You have been assigned to a job:</p>
-      <p><strong>Job:</strong> ${jobLabel}</p>
-      <p><strong>Client:</strong> ${clientName}</p>
-      <p><strong>Date/Time:</strong> ${when}</p>
-      <p><strong>Address:</strong> ${address}</p>
-      <p><strong>Service:</strong> ${job.service_type}</p>`,
-    ),
+    companyName,
+    clientName: job.client_name || "",
+    clientEmail: "",
+    clientPhone: "",
+    address: jobPropertyAddress({
+      street: job.property_street,
+      apt: job.property_apt,
+      city: job.property_city,
+      state: job.property_state,
+      zip: job.property_zip,
+    }),
+    dateLabel: formatDateOnlyLong(job.scheduled_date, timezone),
+    startTime: formatJobClock(job.start_time),
+    endTime: formatJobClock(job.end_time),
+    serviceType: jobServiceLabel(job.service_type),
+    frequencyLabel: jobFrequencyLabel(job.job_type, job.recurring_frequency),
+    depositRequired: false,
+    depositAmount: null,
+    payDepositUrl: null,
+    pdfUrl: null,
   };
 }
 
@@ -394,7 +425,10 @@ serve(async (req) => {
 
       if (emp.phone) {
         try {
-          await sendSms(emp.phone, smsBody);
+          const body = eventType === "assigned"
+            ? employeeJobAssignedSms(noticeFromJob(row, companyName, timezone), personFirstName(emp.first_name) || "there")
+            : smsBody;
+          await sendSms(emp.phone, body);
           sms = true;
         } catch (e) {
           console.error(`SMS failed for employee ${emp.id}:`, e);
