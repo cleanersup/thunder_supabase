@@ -1,6 +1,13 @@
 -- Job status mail was posted to the public project URL with an empty bearer.
 -- Inside Docker that call never reached the function, so a published job stayed
 -- silent. Use the same internal Kong address as the employee notification.
+-- confirmation_notified_at lets the app call and this trigger share one send.
+
+ALTER TABLE public.jobs
+  ADD COLUMN IF NOT EXISTS confirmation_notified_at timestamptz;
+
+COMMENT ON COLUMN public.jobs.confirmation_notified_at IS
+  'Set when the job-confirmed email has been claimed, so publish does not send it twice.';
 
 CREATE OR REPLACE FUNCTION public.dispatch_job_status_email (
   p_job_id uuid,

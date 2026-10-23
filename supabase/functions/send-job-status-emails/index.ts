@@ -439,6 +439,28 @@ function confirmationNotice(job: JobRow, companyName: string, timezone: string, 
   };
 }
 
+async function claimJobConfirmation(
+  supabase: ReturnType<typeof createClient>,
+  jobId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("jobs")
+    .update({ confirmation_notified_at: new Date().toISOString() })
+    .eq("id", jobId)
+    .is("confirmation_notified_at", null)
+    .select("id")
+    .maybeSingle();
+  if (error) return true;
+  return Boolean(data?.id);
+}
+
+async function releaseJobConfirmation(
+  supabase: ReturnType<typeof createClient>,
+  jobId: string,
+): Promise<void> {
+  await supabase.from("jobs").update({ confirmation_notified_at: null }).eq("id", jobId);
+}
+
 function wantsClientEmail(channel: ClientChannel | undefined): boolean {
   return channel !== "sms";
 }
@@ -562,7 +584,22 @@ serve(async (req) => {
     const ownerEmail = authUser.user.email;
     const sent: string[] = [];
 
-    if (isJobConfirmation(prev, newStatus)) {
+    const confirmedStatus = isJobConfirmation(prev, newStatus)
+      ? newStatus
+      : isJobConfirmation(prev, String(row.status || ""))
+        ? String(row.status)
+        : "";
+    if (confirmedStatus) {
+      const claimed = await claimJobConfirmation(supabase, jobId);
+      if (!claimed) {
+        logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "skipped", reason: "confirmation_already_sent" });
+        logJobMessage("status_email", { ...base, audience: "owner", channel: "email", result: "skipped", reason: "confirmation_already_sent" });
+        return new Response(JSON.stringify({ success: true, skipped: "confirmation_already_sent", origin }), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      try {
       const payDepositUrl = jobHasDeposit(row.deposit_required, row.deposit_amount)
         ? await resolveDepositPaymentLink(supabase, row.deposit_invoice_id)
         : null;
@@ -643,6 +680,10 @@ serve(async (req) => {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+      } catch (confirmError) {
+        await releaseJobConfirmation(supabase, jobId);
+        throw confirmError;
+      }
     }
 
     const ownerMail = buildOwnerEmail(row, companyName, prev, newStatus);

@@ -219,6 +219,8 @@ The function skips `upcoming` → `today`, `today` → `missed`, and `upcoming` 
 | Status becomes `cancelled` and employees are assigned | Employee | Push, then email | Job cancelled — {number} | `notify-job-employees` |
 | Those employee events, when the employee has a phone | Employee | SMS | Assigned uses the Thunder Crew sentence. Reschedule and cancel keep the short text | `notify-job-employees` |
 
+Publishing from the owner app calls `send-job-status-emails` with the status the database saved. A job for today is saved as `today`, and a later job is saved as `upcoming`. Both send the confirmation card to the client and the owner. The status trigger calls the same function. `jobs.confirmation_notified_at` keeps that to one send.
+
 On confirmation, the customer email is sent when `jobs.client_email` is set and `client_notification_channel` is null, `email`, or `both`. The customer SMS is sent when `jobs.client_phone` is set and the channel is null, `sms`, or `both`. Neither app writes that column, so it stays null and both go out. Other statuses still email the customer only when the channel is null or `email`.
 
 `send-job-status-sms` still texts the customer for `upcoming`, `cancelled`, and `completed`, and uses the confirmation sentence when the job is first published. The confirmation SMS itself is sent by `send-job-status-emails`, so the apps do not call the SMS function. There is no public job PDF, so the Download PDF button is left off until that file exists. Pay Deposit opens the deposit invoice payment page.
