@@ -16,6 +16,7 @@ import {
   type JobNotice,
 } from "../_shared/jobConfirmationCard.ts";
 import { jobOrigin, logJobMessage } from "../_shared/jobMessageLog.ts";
+import { resolveJobPdfUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -435,7 +436,7 @@ function confirmationNotice(job: JobRow, companyName: string, timezone: string, 
     depositRequired: !!job.deposit_required,
     depositAmount: job.deposit_amount,
     payDepositUrl,
-    pdfUrl: null,
+    pdfUrl: resolveJobPdfUrl(job.id),
   };
 }
 

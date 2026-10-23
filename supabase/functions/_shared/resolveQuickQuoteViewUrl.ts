@@ -106,3 +106,13 @@ export function resolveInvoicePdfUrl(token: string | null | undefined): string |
   if (!slug) return null;
   return `${resolvePublicFunctionsHost()}/functions/v1/download-invoice-pdf?token=${encodeURIComponent(slug)}`;
 }
+
+/** Job PDF opened from the confirmation email. The function returns the file inline. */
+export function resolveJobPdfUrl(
+  jobId: string | null | undefined,
+  host = resolvePublicFunctionsHost(),
+): string | null {
+  const slug = jobId?.trim();
+  if (!slug) return null;
+  return `${host}/functions/v1/download-job-pdf?token=${encodeURIComponent(slug)}`;
+}

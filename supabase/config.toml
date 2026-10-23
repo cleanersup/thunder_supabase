@@ -87,6 +87,9 @@ verify_jwt = false
 [functions.download-estimate-pdf]
 verify_jwt = false
 
+[functions.download-job-pdf]
+verify_jwt = false
+
 [functions.download-contract-pdf]
 verify_jwt = false
 

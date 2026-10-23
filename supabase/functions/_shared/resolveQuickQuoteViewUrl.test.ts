@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveDocumentPdfUrl, resolveEstimateViewUrl, resolveInvoicePdfUrl, resolveQuickQuoteHost, resolveQuickQuoteViewUrl } from "./resolveQuickQuoteViewUrl.ts";
+import { resolveDocumentPdfUrl, resolveEstimateViewUrl, resolveInvoicePdfUrl, resolveJobPdfUrl, resolveQuickQuoteHost, resolveQuickQuoteViewUrl } from "./resolveQuickQuoteViewUrl.ts";
 
 test("View Quote host is staging.thunderpro.co when ENVIRONMENT is staging", () => {
   assert.equal(resolveQuickQuoteHost("staging", "http://kong:8000"), "https://staging.thunderpro.co");
@@ -43,6 +43,14 @@ test("SMS and email open the PDF inline from the public functions host", () => {
     "https://portal.thunderpro.co/functions/v1/download-estimate-pdf?token=abc123token",
   );
   assert.equal(resolveDocumentPdfUrl("  "), null);
+});
+
+test("job email opens the job PDF", () => {
+  assert.equal(
+    resolveJobPdfUrl("job-id", "https://portal.thunderpro.co"),
+    "https://portal.thunderpro.co/functions/v1/download-job-pdf?token=job-id",
+  );
+  assert.equal(resolveJobPdfUrl("  ", "https://portal.thunderpro.co"), null);
 });
 
 test("invoice SMS and email open the invoice PDF", () => {
