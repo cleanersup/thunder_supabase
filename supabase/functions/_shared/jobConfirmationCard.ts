@@ -16,6 +16,7 @@ import {
 } from "./documentEmailCard.ts";
 
 export type JobNoticeAudience = "owner" | "client" | "employee";
+export type JobNoticeMoment = "confirmed" | "cancelled" | "deposit_paid";
 
 export interface JobNotice {
   companyName: string;
@@ -144,9 +145,33 @@ function contactLines(notice: JobNotice, includeReach: boolean): string {
   return lines.join("");
 }
 
-function paragraphs(audience: JobNoticeAudience, notice: JobNotice): string[] {
+function paragraphs(audience: JobNoticeAudience, notice: JobNotice, moment: JobNoticeMoment): string[] {
   const company = companyOf(notice);
   const client = clientOf(notice);
+  if (moment === "cancelled" && audience === "owner") {
+    return [
+      `${client}'s job has been canceled.`,
+      "You can review the job details and cancellation status in your Thunder Pro account.",
+    ];
+  }
+  if (moment === "cancelled") {
+    return [
+      `Your job with ${company} has been canceled. If you have any questions regarding the cancellation or your deposit, please feel free to contact our team.`,
+      "Thank you for your understanding.",
+    ];
+  }
+  if (moment === "deposit_paid" && audience === "owner") {
+    return [
+      `${client} has paid the deposit for the confirmed job.`,
+      "The job has been assigned to your team. You can view the job details and payment information in your Thunder Pro account.",
+    ];
+  }
+  if (moment === "deposit_paid") {
+    return [
+      "Your deposit payment has been received, and your job is confirmed and assigned to our team.",
+      `Thank you for choosing ${company}! We look forward to providing you with great service.`,
+    ];
+  }
   if (audience === "owner") {
     return [
       `The job for ${client} has been confirmed and assigned to your team. You can view the job details in your Thunder Pro account.`,
@@ -163,20 +188,32 @@ function paragraphs(audience: JobNoticeAudience, notice: JobNotice): string[] {
   ];
 }
 
-function subjectFor(audience: JobNoticeAudience, notice: JobNotice): string {
+function subjectFor(audience: JobNoticeAudience, notice: JobNotice, moment: JobNoticeMoment): string {
   const company = companyOf(notice);
-  if (audience === "owner") return `The job for ${clientOf(notice)} has been confirmed — ${company}`;
+  const client = clientOf(notice);
+  if (moment === "cancelled" && audience === "owner") return `${client}'s job has been canceled — ${company}`;
+  if (moment === "cancelled") return `Your job has been canceled — ${company}`;
+  if (moment === "deposit_paid" && audience === "owner") return `${client} has paid the deposit — ${company}`;
+  if (moment === "deposit_paid") return `Your deposit payment has been received — ${company}`;
+  if (audience === "owner") return `The job for ${client} has been confirmed — ${company}`;
   if (audience === "employee") return `You've been assigned a new job — ${company}`;
   return `Your job has been confirmed — ${company}`;
+}
+
+function bannerFor(audience: JobNoticeAudience, moment: JobNoticeMoment): string {
+  if (moment === "cancelled") return "JOB CANCELLED";
+  if (moment === "deposit_paid") return "DEPOSIT PAID";
+  return audience === "employee" ? "ASSIGNED JOB" : "JOB CONFIRMED";
 }
 
 export function renderJobNoticeEmail(
   audience: JobNoticeAudience,
   greetingName: string,
   notice: JobNotice,
+  moment: JobNoticeMoment = "confirmed",
 ): { subject: string; html: string } {
   const hello = greetingName.trim() || "there";
-  const copy = paragraphs(audience, notice);
+  const copy = paragraphs(audience, notice, moment);
   const introHtml = `<p style="margin:0 0 14px 0;font-size:14px;line-height:1.5;">Hello ${escapeHtml(hello)},</p>
 ${copy.map((text, index) => {
     const margin = index === copy.length - 1 ? "0 0 22px 0" : "0 0 14px 0";
@@ -184,7 +221,10 @@ ${copy.map((text, index) => {
   }).join("")}`;
 
   const hasDeposit = jobHasDeposit(notice.depositRequired, notice.depositAmount);
-  const showClientContact = audience === "owner" || (audience === "client" && hasDeposit);
+  const followUp = moment === "cancelled" || moment === "deposit_paid";
+  const showClientContact = followUp
+    ? audience !== "employee"
+    : audience === "owner" || (audience === "client" && hasDeposit);
   const contact = showClientContact
     ? contactLines(notice, true)
     : audience === "employee"
@@ -196,16 +236,16 @@ ${copy.map((text, index) => {
     : "";
 
   const actions: string[] = [];
-  if (audience === "client" && hasDeposit && notice.payDepositUrl) {
+  if (!followUp && audience === "client" && hasDeposit && notice.payDepositUrl) {
     actions.push(emailActionButton(notice.payDepositUrl, "Pay Deposit", EMAIL_GREEN));
   }
   if (audience !== "employee" && notice.pdfUrl) {
     actions.push(emailActionButton(notice.pdfUrl, "Download PDF", EMAIL_NAVY));
   }
 
-  const banner = audience === "employee" ? "ASSIGNED JOB" : "JOB CONFIRMED";
+  const banner = bannerFor(audience, moment);
   return {
-    subject: subjectFor(audience, notice),
+    subject: subjectFor(audience, notice, moment),
     html: renderBrandedEmailCard({
       banner,
       introHtml,

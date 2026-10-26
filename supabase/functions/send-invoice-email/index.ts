@@ -3,10 +3,18 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
 import { resolvePublicAppUrl } from "../_shared/resolvePublicAppUrl.ts";
-import { resolveInvoicePdfUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
+import { resolveInvoicePdfUrl, resolveJobPdfUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
 import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
 import { formatPhoneDisplay, formatStreetAddress, personFirstName } from "../_shared/documentEmailCard.ts";
 import { renderInvoiceEmail } from "../_shared/invoiceEmailCard.ts";
+import {
+  formatJobClock,
+  jobFrequencyLabel,
+  jobPropertyAddress,
+  jobServiceLabel,
+  renderJobNoticeEmail,
+  type JobNotice,
+} from "../_shared/jobConfirmationCard.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -269,6 +277,52 @@ serve(async (req) => {
 
       // Paid confirmation (client + owner). Stripe and manual payment call this with isPaymentConfirmation.
       if (isPaymentConfirmation) {
+        const { data: depositJob } = await supabase
+          .from("jobs")
+          .select("id, client_name, client_email, client_phone, property_street, property_apt, property_city, property_state, property_zip, scheduled_date, start_time, end_time, service_type, job_type, recurring_frequency, deposit_required, deposit_amount")
+          .eq("deposit_invoice_id", invoiceId)
+          .maybeSingle();
+
+        if (depositJob) {
+          const depositAmount = Number(depositJob.deposit_amount) || Number(invoice.total) || 0;
+          const notice: JobNotice = {
+            companyName,
+            clientName: String(depositJob.client_name || invoice.client_name || ""),
+            clientEmail: String(depositJob.client_email || invoice.email || ""),
+            clientPhone: String(depositJob.client_phone || invoice.phone || ""),
+            address: jobPropertyAddress({
+              street: depositJob.property_street,
+              apt: depositJob.property_apt,
+              city: depositJob.property_city,
+              state: depositJob.property_state,
+              zip: depositJob.property_zip,
+            }),
+            dateLabel: formatDateOnlyLong(depositJob.scheduled_date, userTimezone),
+            startTime: formatJobClock(depositJob.start_time),
+            endTime: formatJobClock(depositJob.end_time),
+            serviceType: jobServiceLabel(depositJob.service_type),
+            frequencyLabel: jobFrequencyLabel(depositJob.job_type, depositJob.recurring_frequency),
+            depositRequired: depositAmount > 0,
+            depositAmount,
+            payDepositUrl: null,
+            pdfUrl: resolveJobPdfUrl(depositJob.id),
+          };
+          const clientPaid = renderJobNoticeEmail("client", clientFirst || "there", notice, "deposit_paid");
+          const ownerPaid = renderJobNoticeEmail("owner", personFirstName(profile.first_name) || "there", notice, "deposit_paid");
+
+          if (invoice.email) {
+            await sendEmailViaSMTP(invoice.email, null, clientPaid.subject, clientPaid.html, ownerEmail);
+          }
+          if (ownerEmail) {
+            await sendEmailViaSMTP(ownerEmail, null, ownerPaid.subject, ownerPaid.html, ownerEmail);
+          }
+
+          return new Response(
+            JSON.stringify({ success: true, message: "Deposit payment emails sent", template: "deposit_paid" }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
+
         const clientPaidHtml = renderInvoiceEmail({
           ...cardBase,
           audience: 'client',

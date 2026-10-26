@@ -98,6 +98,39 @@ test("labels are bold and values stay regular", () => {
   assert.doesNotMatch(html, /<span[^>]*>8:30 AM<\/span>/);
 });
 
+test("owner cancellation uses the cancelled banner and the client contact", () => {
+  const { subject, html } = renderJobNoticeEmail("owner", "Javier", notice, "cancelled");
+  assert.match(subject, /Pedro's job has been canceled/);
+  assert.match(html, />JOB CANCELLED</);
+  assert.match(html, /Pedro's job has been canceled/);
+  assert.match(html, /cancellation status in your Thunder Pro account/);
+  assert.match(html, /Name :<\/span> Pedro Cisneros/);
+  assert.match(html, /Deposit :<\/span> \$100/);
+  assert.match(html, /Download PDF/);
+  assert.doesNotMatch(html, /Pay Deposit/);
+});
+
+test("client cancellation names the company and keeps the deposit line", () => {
+  const { html } = renderJobNoticeEmail("client", "Pedro", notice, "cancelled");
+  assert.match(html, /Hello Pedro,/);
+  assert.match(html, /Your job with Clean Up Company has been canceled/);
+  assert.match(html, /Thank you for your understanding/);
+  assert.match(html, /Download PDF/);
+  assert.doesNotMatch(html, /Pay Deposit/);
+});
+
+test("deposit paid emails use the deposit banner for owner and client", () => {
+  const owner = renderJobNoticeEmail("owner", "Javier", notice, "deposit_paid");
+  const client = renderJobNoticeEmail("client", "Pedro", notice, "deposit_paid");
+  assert.match(owner.html, />DEPOSIT PAID</);
+  assert.match(owner.html, /Pedro has paid the deposit for the confirmed job/);
+  assert.match(owner.html, /payment information in your Thunder Pro account/);
+  assert.match(client.html, /Your deposit payment has been received/);
+  assert.match(client.html, /Thank you for choosing Clean Up Company!/);
+  assert.match(client.html, /Download PDF/);
+  assert.doesNotMatch(client.html, /Pay Deposit/);
+});
+
 test("confirmation SMS follows the email sentences", () => {
   assert.match(clientJobConfirmedSms(notice), /your job has been confirmed and assigned to our team/);
   assert.match(clientJobConfirmedSms(notice), /Pay deposit: https:\/\/dashboard.thunderpro.co/);

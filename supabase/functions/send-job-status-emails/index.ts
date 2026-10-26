@@ -687,6 +687,25 @@ serve(async (req) => {
       }
     }
 
+    if (newStatus === "cancelled") {
+      const notice = confirmationNotice(row, companyName, timezone, null);
+      const ownerFirst = personFirstName(profile?.first_name) || "there";
+      const ownerMail = renderJobNoticeEmail("owner", ownerFirst, notice, "cancelled");
+      await sendEmailViaSMTP(ownerEmail, ownerMail.subject, ownerMail.html, ownerEmail);
+      sent.push("owner");
+      logJobMessage("status_email", { ...base, audience: "owner", channel: "email", result: "sent", template: "job_cancelled" });
+
+      if (!row.client_email) {
+        logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "skipped", reason: "no_client_email" });
+      } else if (!shouldSendClientEmail(clientChannel)) {
+        logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "skipped", reason: "client_channel", clientChannel: clientChannel ?? null });
+      } else {
+        const clientMail = renderJobNoticeEmail("client", personFirstName(row.client_name) || "there", notice, "cancelled");
+        await sendEmailViaSMTP(row.client_email, clientMail.subject, clientMail.html, ownerEmail);
+        sent.push("client");
+        logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "sent", template: "job_cancelled" });
+      }
+    } else {
     const ownerMail = buildOwnerEmail(row, companyName, prev, newStatus);
     await sendEmailViaSMTP(ownerEmail, ownerMail.subject, ownerMail.html, ownerEmail);
     sent.push("owner");
@@ -710,6 +729,7 @@ serve(async (req) => {
       } else {
         logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "skipped", reason: "no_template" });
       }
+    }
     }
 
     if (EMPLOYEE_NOTIFY_STATUSES.has(newStatus)) {
