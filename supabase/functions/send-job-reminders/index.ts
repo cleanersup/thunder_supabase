@@ -1,8 +1,21 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import * as Sentry from "npm:@sentry/deno";
+import { personFirstName } from "../_shared/documentEmailCard.ts";
 import { sendPushToEmployees } from "../_shared/fcm.ts";
+import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
+import {
+  formatJobClock,
+  jobFrequencyLabel,
+  jobHasDeposit,
+  jobPropertyAddress,
+  jobServiceLabel,
+  renderJobReminderEmail,
+  type JobNotice,
+  type JobReminderDeposit,
+} from "../_shared/jobConfirmationCard.ts";
 import { jobOrigin, logJobMessage } from "../_shared/jobMessageLog.ts";
+import { resolveJobPdfUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -25,6 +38,12 @@ type JobRow = {
   end_time: string | null;
   client_name: string | null;
   client_email: string | null;
+  client_phone: string | null;
+  job_type: string | null;
+  recurring_frequency: string | null;
+  deposit_required: boolean | null;
+  deposit_amount: number | null;
+  deposit_invoice_id: string | null;
   property_street: string | null;
   property_apt: string | null;
   property_city: string | null;
@@ -217,12 +236,73 @@ function buildClientReminderEmail(
   };
 }
 
+function publicPayUrl(paymentToken: string | null | undefined, invoiceId: string): string {
+  const publicAppUrl = Deno.env.get("PUBLIC_APP_URL") ||
+    Deno.env.get("APP_URL") ||
+    "https://app.staging.thunderpro.co";
+  return `${publicAppUrl}/invoice/payment/${paymentToken || invoiceId}`;
+}
+
+async function resolveReminderDeposit(
+  supabase: ReturnType<typeof createClient>,
+  job: JobRow,
+): Promise<{ state: JobReminderDeposit; payUrl: string | null }> {
+  if (!jobHasDeposit(job.deposit_required, job.deposit_amount) || !job.deposit_invoice_id) {
+    return jobHasDeposit(job.deposit_required, job.deposit_amount)
+      ? { state: "pending", payUrl: null }
+      : { state: "paid", payUrl: null };
+  }
+
+  const { data: invoice } = await supabase
+    .from("invoices")
+    .select("id, payment_token, status")
+    .eq("id", job.deposit_invoice_id)
+    .maybeSingle();
+
+  if (!invoice || invoice.status === "Paid" || invoice.status === "Cancelled") {
+    return { state: "paid", payUrl: null };
+  }
+
+  return { state: "pending", payUrl: publicPayUrl(invoice.payment_token, invoice.id) };
+}
+
+function reminderNotice(
+  job: JobRow,
+  companyName: string,
+  timezone: string,
+  payDepositUrl: string | null,
+): JobNotice {
+  return {
+    companyName,
+    clientName: job.client_name || "",
+    clientEmail: job.client_email || "",
+    clientPhone: job.client_phone || "",
+    address: jobPropertyAddress({
+      street: job.property_street,
+      apt: job.property_apt,
+      city: job.property_city,
+      state: job.property_state,
+      zip: job.property_zip,
+    }),
+    dateLabel: formatDateOnlyLong(job.scheduled_date, timezone),
+    startTime: formatJobClock(job.start_time),
+    endTime: formatJobClock(job.end_time),
+    serviceType: jobServiceLabel(job.service_type),
+    frequencyLabel: jobFrequencyLabel(job.job_type, job.recurring_frequency),
+    depositRequired: !!job.deposit_required,
+    depositAmount: job.deposit_amount,
+    payDepositUrl,
+    pdfUrl: resolveJobPdfUrl(job.id),
+  };
+}
+
 async function processJobReminder(
   supabase: ReturnType<typeof createClient>,
   job: JobRow,
   reminderType: ReminderType,
   timezone: string,
   companyName: string,
+  ownerFirstName: string,
 ): Promise<boolean> {
   const { data: alreadySent } = await supabase
     .from("job_notifications_sent")
@@ -274,7 +354,42 @@ async function processJobReminder(
     }
   }
 
-  if (job.client_email) {
+  if (reminderType === "reminder_24h") {
+    const deposit = await resolveReminderDeposit(supabase, job);
+    const notice = reminderNotice(job, companyName, timezone, deposit.payUrl);
+    const { data: authUser } = await supabase.auth.admin.getUserById(job.user_id);
+    const ownerEmail = authUser?.user?.email;
+    if (ownerEmail) {
+      const ownerMail = renderJobReminderEmail("owner", personFirstName(ownerFirstName) || "there", notice, deposit.state);
+      await sendEmailViaSMTP(ownerEmail, ownerMail.subject, ownerMail.html);
+      logJobMessage("reminder_email", {
+        ...base,
+        audience: "owner",
+        result: "sent",
+        template: deposit.state === "pending" ? "job_reminder_deposit_pending" : "job_reminder_deposit_paid",
+      });
+    } else {
+      logJobMessage("reminder_email", { ...base, audience: "owner", result: "skipped", reason: "owner_email_not_found" });
+    }
+
+    if (job.client_email) {
+      const clientMail = renderJobReminderEmail(
+        "client",
+        personFirstName(job.client_name) || "there",
+        notice,
+        deposit.state,
+      );
+      await sendEmailViaSMTP(job.client_email, clientMail.subject, clientMail.html);
+      logJobMessage("reminder_email", {
+        ...base,
+        audience: "client",
+        result: "sent",
+        template: deposit.state === "pending" ? "job_reminder_deposit_pending" : "job_reminder_deposit_paid",
+      });
+    } else {
+      logJobMessage("reminder_email", { ...base, audience: "client", result: "skipped", reason: "no_client_email" });
+    }
+  } else if (job.client_email) {
     const clientMail = buildClientReminderEmail(job, companyName, reminderType, timezone);
     await sendEmailViaSMTP(job.client_email, clientMail.subject, clientMail.html);
     logJobMessage("reminder_email", { ...base, audience: "client", result: "sent" });
@@ -325,7 +440,7 @@ const handler = async (req: Request): Promise<Response> => {
         try {
           const { data: profile } = await supabase
             .from("profiles")
-            .select("company_name, timezone")
+            .select("company_name, timezone, first_name")
             .eq("user_id", job.user_id)
             .maybeSingle();
 
@@ -335,6 +450,7 @@ const handler = async (req: Request): Promise<Response> => {
             "reminder_24h",
             profile?.timezone || "America/New_York",
             profile?.company_name || "Thunder Pro",
+            profile?.first_name || "",
           );
           if (sent) sentCount++;
         } catch (e) {
@@ -354,7 +470,7 @@ const handler = async (req: Request): Promise<Response> => {
         try {
           const { data: profile } = await supabase
             .from("profiles")
-            .select("company_name, timezone")
+            .select("company_name, timezone, first_name")
             .eq("user_id", job.user_id)
             .maybeSingle();
 
@@ -364,6 +480,7 @@ const handler = async (req: Request): Promise<Response> => {
             "reminder_day_of",
             profile?.timezone || "America/New_York",
             profile?.company_name || "Thunder Pro",
+            profile?.first_name || "",
           );
           if (sent) sentCount++;
         } catch (e) {

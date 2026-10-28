@@ -9,6 +9,7 @@ import {
   jobPropertyAddress,
   ownerJobConfirmedSms,
   renderJobNoticeEmail,
+  renderJobReminderEmail,
   type JobNotice,
 } from "./jobConfirmationCard.ts";
 
@@ -129,6 +130,53 @@ test("deposit paid emails use the deposit banner for owner and client", () => {
   assert.match(client.html, /Thank you for choosing Clean Up Company!/);
   assert.match(client.html, /Download PDF/);
   assert.doesNotMatch(client.html, /Pay Deposit/);
+});
+
+test("owner tomorrow reminder with a pending deposit shows the deposit and no buttons", () => {
+  const { subject, html } = renderJobReminderEmail("owner", "Javier", notice, "pending");
+  assert.match(subject, /Pedro's job is scheduled for tomorrow/);
+  assert.match(html, />JOB REMINDER TOMORROW</);
+  assert.match(html, /Hello Javier,/);
+  assert.match(html, /This is a reminder that Pedro's job is scheduled for tomorrow/);
+  assert.match(html, /Name :<\/span> Pedro Cisneros/);
+  assert.match(html, /Pending Deposit :<\/span> \$100/);
+  assert.doesNotMatch(html, /<span style="font-weight:700;">Deposit :<\/span>/);
+  assert.doesNotMatch(html, /Pay Deposit/);
+  assert.doesNotMatch(html, /Download PDF/);
+  assert.doesNotMatch(html, /CONFIRMATION REMINDER/);
+});
+
+test("owner tomorrow reminder with a paid deposit omits the deposit line", () => {
+  const { html } = renderJobReminderEmail("owner", "Javier", notice, "paid");
+  assert.match(html, /Pedro's job is scheduled for tomorrow/);
+  assert.match(html, /Frequency :<\/span> One Time/);
+  assert.doesNotMatch(html, /Deposit/);
+  assert.doesNotMatch(html, /Pay Deposit/);
+  assert.doesNotMatch(html, /Download PDF/);
+});
+
+test("client tomorrow reminder with a pending deposit offers pay and the PDF", () => {
+  const { subject, html } = renderJobReminderEmail("client", "Pedro", notice, "pending");
+  assert.match(subject, /Your job is scheduled for tomorrow/);
+  assert.match(html, /Hello Pedro,/);
+  assert.match(html, /your job with Clean Up Company is scheduled for tomorrow/);
+  assert.match(html, /Thank you for choosing Clean Up Company\./);
+  assert.match(html, /Deposit :<\/span> \$100/);
+  assert.doesNotMatch(html, /Pending Deposit/);
+  assert.match(html, /Pay Deposit/);
+  assert.match(html, /background-color:#239445/);
+  assert.match(html, /Download PDF/);
+  assert.match(html, /background-color:#1e3a8a/);
+});
+
+test("client tomorrow reminder with a paid deposit has no deposit line and no buttons", () => {
+  const { html } = renderJobReminderEmail("client", "Pedro", notice, "paid");
+  assert.match(html, /Thank you for choosing Clean Up Company\./);
+  assert.match(html, /Name :<\/span> Pedro Cisneros/);
+  assert.match(html, /Frequency :<\/span> One Time/);
+  assert.doesNotMatch(html, /Deposit/);
+  assert.doesNotMatch(html, /Pay Deposit/);
+  assert.doesNotMatch(html, /Download PDF/);
 });
 
 test("confirmation SMS follows the email sentences", () => {

@@ -211,7 +211,8 @@ The function skips `upcoming` → `today`, `today` → `missed`, and `upcoming` 
 | `upcoming` that is not a first confirmation, or `cancelled` | Employee | Email | Job assigned — {number} / Job cancelled — {number} | `send-job-status-emails` |
 | Estimate or walkthrough is linked to the new draft | Owner | Email | Job created from {source} — {number} | `send-job-conversion-emails` |
 | That link | Customer | Email | Your {source} was moved to a job with {company} | `send-job-conversion-emails` |
-| Day before, job still `upcoming`, cron at 9:00 UTC | Customer | Email | Recordatorio: tu trabajo es mañana — {company} | `send-job-reminders` |
+| Day before, job still `upcoming`, cron at 9:00 UTC | Customer | Email | Your job is scheduled for tomorrow — {company}. Banner JOB REMINDER TOMORROW. Pay Deposit and Download PDF when the deposit is still unpaid | `send-job-reminders` |
+| That day-before reminder | Owner | Email | {client}'s job is scheduled for tomorrow — {company}. Banner JOB REMINDER TOMORROW. Pending Deposit when the deposit is still unpaid | `send-job-reminders` |
 | Day of, job status `today`, same cron | Customer | Email | Recordatorio: tu trabajo es hoy — {company} | `send-job-reminders` |
 | Those two reminders | Employee | Email | Recordatorio de trabajo — mañana/hoy — {number} | `send-job-reminders` |
 | Insert of a non-draft job that already has employees, or the employee list changes | Employee | Push, then email | You've been assigned a new job — {company} | `notify-job-employees` |
@@ -229,7 +230,7 @@ A job published for today (`draft` → `today`) uses the confirmation card. `upc
 
 The conversion email goes out when `estimates.job_id` or `walkthroughs.job_id` is set, while the job is still a draft. Publishing that job later still sends the confirmation email.
 
-Reminders do not email the owner. Subjects are Spanish. Other job mail is English.
+The day-before reminder emails the owner and the customer with the JOB REMINDER TOMORROW card. A deposit invoice that is not Paid shows Pending Deposit on the owner email, and Deposit plus Pay Deposit and Download PDF on the customer email. A paid deposit omits that line and those buttons. The day-of customer reminder and both employee reminders stay on the older Spanish templates. Other job mail is English.
 
 Each send writes a line to the edge-runtime log starting with `[job-message]`. `origin` is `converted_estimate` when the job has `estimate_id`, `converted_walkthrough` when it has `walkthrough_id`, and `created` when the owner made the job directly. Filter with `docker logs supabase_edge_runtime_euydrdzayvjahstvmwoj 2>&1 | grep job-message`.
 

@@ -17,6 +17,7 @@ import {
 
 export type JobNoticeAudience = "owner" | "client" | "employee";
 export type JobNoticeMoment = "confirmed" | "cancelled" | "deposit_paid";
+export type JobReminderDeposit = "pending" | "paid";
 
 export interface JobNotice {
   companyName: string;
@@ -204,6 +205,86 @@ function bannerFor(audience: JobNoticeAudience, moment: JobNoticeMoment): string
   if (moment === "cancelled") return "JOB CANCELLED";
   if (moment === "deposit_paid") return "DEPOSIT PAID";
   return audience === "employee" ? "ASSIGNED JOB" : "JOB CONFIRMED";
+}
+
+function reminderParagraphs(
+  audience: "owner" | "client",
+  notice: JobNotice,
+): string[] {
+  const company = companyOf(notice);
+  const client = clientOf(notice);
+  if (audience === "owner") {
+    return [
+      `This is a reminder that ${client}'s job is scheduled for tomorrow. You can review the job details and schedule in your Thunder Pro account to ensure everything is ready.`,
+    ];
+  }
+  return [
+    `This is a friendly reminder that your job with ${company} is scheduled for tomorrow. We look forward to providing you with great service!`,
+    `Thank you for choosing ${company}.`,
+  ];
+}
+
+function reminderScheduleLines(
+  notice: JobNotice,
+  audience: "owner" | "client",
+  deposit: JobReminderDeposit,
+): string {
+  const lines = [
+    emailDetailLine("Date", notice.dateLabel),
+    emailDetailLine("Start Time", notice.startTime),
+    emailDetailLine("End Time", notice.endTime),
+    emailDetailLine("Service Type", notice.serviceType),
+    emailDetailLine("Frequency", notice.frequencyLabel),
+  ];
+  if (deposit === "pending" && audience === "owner") {
+    lines.push(emailDetailLine("Pending Deposit", jobDepositLabel(notice.depositRequired, notice.depositAmount)));
+  }
+  if (deposit === "pending" && audience === "client") {
+    lines.push(emailDetailLine("Deposit", jobDepositLabel(notice.depositRequired, notice.depositAmount)));
+  }
+  return lines.join("");
+}
+
+export function renderJobReminderEmail(
+  audience: "owner" | "client",
+  greetingName: string,
+  notice: JobNotice,
+  deposit: JobReminderDeposit,
+): { subject: string; html: string } {
+  const hello = greetingName.trim() || "there";
+  const company = companyOf(notice);
+  const client = clientOf(notice);
+  const copy = reminderParagraphs(audience, notice);
+  const introHtml = `<p style="margin:0 0 14px 0;font-size:14px;line-height:1.5;">Hello ${escapeHtml(hello)},</p>
+${copy.map((text, index) => {
+    const margin = index === copy.length - 1 ? "0 0 22px 0" : "0 0 14px 0";
+    return `<p style="margin:${margin};font-size:14px;line-height:1.55;">${escapeHtml(text)}</p>`;
+  }).join("")}`;
+
+  const contact = contactLines(notice, true);
+  const schedule = reminderScheduleLines(notice, audience, deposit);
+  const spacer = `<p style="margin:0 0 14px 0;font-size:8px;line-height:8px;">&nbsp;</p>`;
+  const actions: string[] = [];
+  if (audience === "client" && deposit === "pending" && notice.payDepositUrl) {
+    actions.push(emailActionButton(notice.payDepositUrl, "Pay Deposit", EMAIL_GREEN));
+  }
+  if (audience === "client" && deposit === "pending" && notice.pdfUrl) {
+    actions.push(emailActionButton(notice.pdfUrl, "Download PDF", EMAIL_NAVY));
+  }
+
+  const subject = audience === "owner"
+    ? `${client}'s job is scheduled for tomorrow — ${company}`
+    : `Your job is scheduled for tomorrow — ${company}`;
+
+  return {
+    subject,
+    html: renderBrandedEmailCard({
+      banner: "JOB REMINDER TOMORROW",
+      introHtml,
+      linesHtml: `${contact}${spacer}${schedule}`,
+      actionsHtml: actions.join(""),
+    }),
+  };
 }
 
 export function renderJobNoticeEmail(
