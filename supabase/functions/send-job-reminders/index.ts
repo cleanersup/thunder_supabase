@@ -7,9 +7,11 @@ import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
 import {
   formatJobClock,
   jobFrequencyLabel,
+  isWithinOneHourReminderWindow,
   jobHasDeposit,
   jobPropertyAddress,
   jobServiceLabel,
+  jobStartUtc,
   renderJobReminderEmail,
   type JobNotice,
   type JobReminderDeposit,
@@ -212,30 +214,6 @@ function buildEmployeeReminderEmail(
   };
 }
 
-function buildClientReminderEmail(
-  job: JobRow,
-  companyName: string,
-  reminderType: ReminderType,
-  timezone: string,
-): { subject: string; html: string } {
-  const clientName = job.client_name || "Cliente";
-  const schedule = `${formatDate(job.scheduled_date, timezone)} a las ${formatTime(job.start_time)}`;
-  const address = formatAddress(job) || "N/A";
-  const whenLabel = reminderType === "reminder_24h" ? "mañana" : "hoy";
-
-  return {
-    subject: `Recordatorio: tu trabajo es ${whenLabel} — ${companyName}`,
-    html: wrapEmail(
-      `Recordatorio de trabajo (${whenLabel})`,
-      `<p>Hola ${clientName},</p>
-      <p>Te recordamos que tu servicio con <strong>${companyName}</strong> está programado para <strong>${whenLabel}</strong>.</p>
-      <p><strong>Fecha y hora:</strong> ${schedule}</p>
-      <p><strong>Dirección:</strong> ${address}</p>
-      <p>¡Te esperamos!</p>`,
-    ),
-  };
-}
-
 function publicPayUrl(paymentToken: string | null | undefined, invoiceId: string): string {
   const publicAppUrl = Deno.env.get("PUBLIC_APP_URL") ||
     Deno.env.get("APP_URL") ||
@@ -354,19 +332,20 @@ async function processJobReminder(
     }
   }
 
-  if (reminderType === "reminder_24h") {
+  if (reminderType === "reminder_24h" || reminderType === "reminder_day_of") {
     const deposit = await resolveReminderDeposit(supabase, job);
     const notice = reminderNotice(job, companyName, timezone, deposit.payUrl);
+    const when = reminderType === "reminder_day_of" ? "today" : "tomorrow";
     const { data: authUser } = await supabase.auth.admin.getUserById(job.user_id);
     const ownerEmail = authUser?.user?.email;
     if (ownerEmail) {
-      const ownerMail = renderJobReminderEmail("owner", personFirstName(ownerFirstName) || "there", notice, deposit.state);
+      const ownerMail = renderJobReminderEmail("owner", personFirstName(ownerFirstName) || "there", notice, deposit.state, when);
       await sendEmailViaSMTP(ownerEmail, ownerMail.subject, ownerMail.html);
       logJobMessage("reminder_email", {
         ...base,
         audience: "owner",
         result: "sent",
-        template: deposit.state === "pending" ? "job_reminder_deposit_pending" : "job_reminder_deposit_paid",
+        template: `job_reminder_${when}_${deposit.state === "pending" ? "deposit_pending" : "deposit_paid"}`,
       });
     } else {
       logJobMessage("reminder_email", { ...base, audience: "owner", result: "skipped", reason: "owner_email_not_found" });
@@ -378,23 +357,18 @@ async function processJobReminder(
         personFirstName(job.client_name) || "there",
         notice,
         deposit.state,
+        when,
       );
       await sendEmailViaSMTP(job.client_email, clientMail.subject, clientMail.html);
       logJobMessage("reminder_email", {
         ...base,
         audience: "client",
         result: "sent",
-        template: deposit.state === "pending" ? "job_reminder_deposit_pending" : "job_reminder_deposit_paid",
+        template: `job_reminder_${when}_${deposit.state === "pending" ? "deposit_pending" : "deposit_paid"}`,
       });
     } else {
       logJobMessage("reminder_email", { ...base, audience: "client", result: "skipped", reason: "no_client_email" });
     }
-  } else if (job.client_email) {
-    const clientMail = buildClientReminderEmail(job, companyName, reminderType, timezone);
-    await sendEmailViaSMTP(job.client_email, clientMail.subject, clientMail.html);
-    logJobMessage("reminder_email", { ...base, audience: "client", result: "sent" });
-  } else {
-    logJobMessage("reminder_email", { ...base, audience: "client", result: "skipped", reason: "no_client_email" });
   }
 
   await supabase.from("job_notifications_sent").insert({
@@ -419,72 +393,93 @@ const handler = async (req: Request): Promise<Response> => {
         Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
       );
 
-      const today = new Date();
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-
-      const todayDate = today.toISOString().split("T")[0];
-      const tomorrowDate = tomorrow.toISOString().split("T")[0];
-
-      let sentCount = 0;
-
-      const { data: jobs24h, error: err24h } = await supabase
-        .from("jobs")
-        .select("*")
-        .eq("status", "upcoming")
-        .eq("scheduled_date", tomorrowDate);
-
-      if (err24h) throw err24h;
-
-      for (const job of (jobs24h || []) as JobRow[]) {
+      let scope: "daily" | "starting_soon" = "daily";
+      if (req.method === "POST") {
         try {
-          const { data: profile } = await supabase
-            .from("profiles")
-            .select("company_name, timezone, first_name")
-            .eq("user_id", job.user_id)
-            .maybeSingle();
-
-          const sent = await processJobReminder(
-            supabase,
-            job,
-            "reminder_24h",
-            profile?.timezone || "America/New_York",
-            profile?.company_name || "Thunder Pro",
-            profile?.first_name || "",
-          );
-          if (sent) sentCount++;
-        } catch (e) {
-          console.error(`Failed 24h reminder for job ${job.id}:`, e);
+          const body = await req.json();
+          if (body?.scope === "starting_soon") scope = "starting_soon";
+        } catch {
+          scope = "daily";
         }
       }
 
-      const { data: jobsToday, error: errToday } = await supabase
-        .from("jobs")
-        .select("*")
-        .eq("status", "today")
-        .eq("scheduled_date", todayDate);
+      const now = new Date();
+      const tomorrow = new Date(now);
+      tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+      const tomorrowDate = tomorrow.toISOString().split("T")[0];
+      const windowStart = new Date(now);
+      windowStart.setUTCDate(windowStart.getUTCDate() - 1);
+      const windowEnd = new Date(now);
+      windowEnd.setUTCDate(windowEnd.getUTCDate() + 1);
 
-      if (errToday) throw errToday;
+      let sentCount = 0;
 
-      for (const job of (jobsToday || []) as JobRow[]) {
-        try {
-          const { data: profile } = await supabase
-            .from("profiles")
-            .select("company_name, timezone, first_name")
-            .eq("user_id", job.user_id)
-            .maybeSingle();
+      if (scope === "daily") {
+        const { data: jobs24h, error: err24h } = await supabase
+          .from("jobs")
+          .select("*")
+          .eq("status", "upcoming")
+          .eq("scheduled_date", tomorrowDate);
 
-          const sent = await processJobReminder(
-            supabase,
-            job,
-            "reminder_day_of",
-            profile?.timezone || "America/New_York",
-            profile?.company_name || "Thunder Pro",
-            profile?.first_name || "",
-          );
-          if (sent) sentCount++;
-        } catch (e) {
-          console.error(`Failed day-of reminder for job ${job.id}:`, e);
+        if (err24h) throw err24h;
+
+        for (const job of (jobs24h || []) as JobRow[]) {
+          try {
+            const { data: profile } = await supabase
+              .from("profiles")
+              .select("company_name, timezone, first_name")
+              .eq("user_id", job.user_id)
+              .maybeSingle();
+
+            const sent = await processJobReminder(
+              supabase,
+              job,
+              "reminder_24h",
+              profile?.timezone || "America/New_York",
+              profile?.company_name || "Thunder Pro",
+              profile?.first_name || "",
+            );
+            if (sent) sentCount++;
+          } catch (e) {
+            console.error(`Failed 24h reminder for job ${job.id}:`, e);
+          }
+        }
+      }
+
+      if (scope === "starting_soon") {
+        const { data: jobsSoon, error: errSoon } = await supabase
+          .from("jobs")
+          .select("*")
+          .in("status", ["today", "upcoming"])
+          .gte("scheduled_date", windowStart.toISOString().split("T")[0])
+          .lte("scheduled_date", windowEnd.toISOString().split("T")[0]);
+
+        if (errSoon) throw errSoon;
+
+        for (const job of (jobsSoon || []) as JobRow[]) {
+          try {
+            const { data: profile } = await supabase
+              .from("profiles")
+              .select("company_name, timezone, first_name")
+              .eq("user_id", job.user_id)
+              .maybeSingle();
+
+            const timezone = profile?.timezone || "America/New_York";
+            const start = jobStartUtc(job.scheduled_date, job.start_time, timezone);
+            if (!start || !isWithinOneHourReminderWindow(now, start)) continue;
+
+            const sent = await processJobReminder(
+              supabase,
+              job,
+              "reminder_day_of",
+              timezone,
+              profile?.company_name || "Thunder Pro",
+              profile?.first_name || "",
+            );
+            if (sent) sentCount++;
+          } catch (e) {
+            console.error(`Failed one-hour reminder for job ${job.id}:`, e);
+          }
         }
       }
 

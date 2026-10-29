@@ -9,6 +9,8 @@ import {
   jobPropertyAddress,
   ownerJobConfirmedSms,
   renderJobNoticeEmail,
+  isWithinOneHourReminderWindow,
+  jobStartUtc,
   renderJobReminderEmail,
   type JobNotice,
 } from "./jobConfirmationCard.ts";
@@ -177,6 +179,51 @@ test("client tomorrow reminder with a paid deposit has no deposit line and no bu
   assert.doesNotMatch(html, /Deposit/);
   assert.doesNotMatch(html, /Pay Deposit/);
   assert.doesNotMatch(html, /Download PDF/);
+});
+
+test("owner today reminder with a pending deposit shows the deposit and no buttons", () => {
+  const { subject, html } = renderJobReminderEmail("owner", "Javier", notice, "pending", "today");
+  assert.match(subject, /Pedro's job is scheduled to start in one hour/);
+  assert.match(html, />JOB REMINDER TODAY</);
+  assert.match(html, /Hello Javier,/);
+  assert.match(html, /scheduled to start in one hour/);
+  assert.match(html, /Pending Deposit :<\/span> \$100/);
+  assert.doesNotMatch(html, /<span style="font-weight:700;">Deposit :<\/span>/);
+  assert.doesNotMatch(html, /Pay Deposit/);
+  assert.doesNotMatch(html, /Download PDF/);
+  assert.doesNotMatch(html, /CONFIRMATION REMINDER/);
+});
+
+test("client today reminder with a pending deposit offers pay and the PDF", () => {
+  const { subject, html } = renderJobReminderEmail("client", "Pedro", notice, "pending", "today");
+  assert.match(subject, /Your job is scheduled to start in one hour/);
+  assert.match(html, /your job with Clean Up Company is scheduled to start in one hour/);
+  assert.match(html, /Thank you for choosing Clean Up Company\./);
+  assert.match(html, /Deposit :<\/span> \$100/);
+  assert.match(html, /Pay Deposit/);
+  assert.match(html, /Download PDF/);
+});
+
+test("today reminder with a paid deposit omits the deposit line and the buttons", () => {
+  const owner = renderJobReminderEmail("owner", "Javier", notice, "paid", "today");
+  const client = renderJobReminderEmail("client", "Pedro", notice, "paid", "today");
+  assert.match(owner.html, />JOB REMINDER TODAY</);
+  assert.match(client.html, /scheduled to start in one hour/);
+  assert.doesNotMatch(owner.html, /Deposit/);
+  assert.doesNotMatch(client.html, /Deposit/);
+  assert.doesNotMatch(client.html, /Pay Deposit/);
+  assert.doesNotMatch(client.html, /Download PDF/);
+});
+
+test("the today reminder is due one hour before the start", () => {
+  const start = jobStartUtc("2026-10-20", "08:30", "America/New_York");
+  assert.ok(start);
+  assert.equal(start.toISOString(), "2026-10-20T12:30:00.000Z");
+  const oneHourBefore = new Date(start.getTime() - 60 * 60 * 1000);
+  assert.equal(isWithinOneHourReminderWindow(oneHourBefore, start), true);
+  assert.equal(isWithinOneHourReminderWindow(new Date(oneHourBefore.getTime() - 11 * 60 * 1000), start), false);
+  assert.equal(isWithinOneHourReminderWindow(new Date(start.getTime() - 30 * 60 * 1000), start), false);
+  assert.equal(jobStartUtc("2026-10-20", null, "America/New_York"), null);
 });
 
 test("confirmation SMS follows the email sentences", () => {

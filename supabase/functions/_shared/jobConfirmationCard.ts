@@ -18,6 +18,7 @@ import {
 export type JobNoticeAudience = "owner" | "client" | "employee";
 export type JobNoticeMoment = "confirmed" | "cancelled" | "deposit_paid";
 export type JobReminderDeposit = "pending" | "paid";
+export type JobReminderWhen = "tomorrow" | "today";
 
 export interface JobNotice {
   companyName: string;
@@ -210,16 +211,18 @@ function bannerFor(audience: JobNoticeAudience, moment: JobNoticeMoment): string
 function reminderParagraphs(
   audience: "owner" | "client",
   notice: JobNotice,
+  when: JobReminderWhen,
 ): string[] {
   const company = companyOf(notice);
   const client = clientOf(notice);
+  const timing = when === "today" ? "to start in one hour" : "for tomorrow";
   if (audience === "owner") {
     return [
-      `This is a reminder that ${client}'s job is scheduled for tomorrow. You can review the job details and schedule in your Thunder Pro account to ensure everything is ready.`,
+      `This is a reminder that ${client}'s job is scheduled ${timing}. You can review the job details and schedule in your Thunder Pro account to ensure everything is ready.`,
     ];
   }
   return [
-    `This is a friendly reminder that your job with ${company} is scheduled for tomorrow. We look forward to providing you with great service!`,
+    `This is a friendly reminder that your job with ${company} is scheduled ${timing}. We look forward to providing you with great service!`,
     `Thank you for choosing ${company}.`,
   ];
 }
@@ -250,11 +253,12 @@ export function renderJobReminderEmail(
   greetingName: string,
   notice: JobNotice,
   deposit: JobReminderDeposit,
+  when: JobReminderWhen = "tomorrow",
 ): { subject: string; html: string } {
   const hello = greetingName.trim() || "there";
   const company = companyOf(notice);
   const client = clientOf(notice);
-  const copy = reminderParagraphs(audience, notice);
+  const copy = reminderParagraphs(audience, notice, when);
   const introHtml = `<p style="margin:0 0 14px 0;font-size:14px;line-height:1.5;">Hello ${escapeHtml(hello)},</p>
 ${copy.map((text, index) => {
     const margin = index === copy.length - 1 ? "0 0 22px 0" : "0 0 14px 0";
@@ -272,14 +276,15 @@ ${copy.map((text, index) => {
     actions.push(emailActionButton(notice.pdfUrl, "Download PDF", EMAIL_NAVY));
   }
 
+  const timing = when === "today" ? "to start in one hour" : "for tomorrow";
   const subject = audience === "owner"
-    ? `${client}'s job is scheduled for tomorrow — ${company}`
-    : `Your job is scheduled for tomorrow — ${company}`;
+    ? `${client}'s job is scheduled ${timing} — ${company}`
+    : `Your job is scheduled ${timing} — ${company}`;
 
   return {
     subject,
     html: renderBrandedEmailCard({
-      banner: "JOB REMINDER TOMORROW",
+      banner: when === "today" ? "JOB REMINDER TODAY" : "JOB REMINDER TOMORROW",
       introHtml,
       linesHtml: `${contact}${spacer}${schedule}`,
       actionsHtml: actions.join(""),
@@ -343,6 +348,59 @@ function datedParts(notice: JobNotice): string {
     notice.endTime ? `End Time: ${notice.endTime}.` : "",
   ].filter(Boolean);
   return parts.length ? ` ${parts.join(" ")}` : "";
+}
+
+/** True when `now` is within 10 minutes of one hour before `startUtc`. */
+export function isWithinOneHourReminderWindow(now: Date, startUtc: Date): boolean {
+  const oneHourBefore = startUtc.getTime() - 60 * 60 * 1000;
+  const timeDiff = now.getTime() - oneHourBefore;
+  return timeDiff >= -10 * 60 * 1000 && timeDiff <= 10 * 60 * 1000;
+}
+
+function wallClockUtc(instant: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(instant);
+  const read = (type: string) => Number(parts.find((part) => part.type === type)?.value);
+  let hour = read("hour");
+  const extraDay = hour === 24 ? 1 : 0;
+  if (hour === 24) hour = 0;
+  return Date.UTC(read("year"), read("month") - 1, read("day") + extraDay, hour, read("minute"), read("second"));
+}
+
+/** Owner-local scheduled date and start time as a UTC instant. */
+export function jobStartUtc(
+  dateStr: string | null | undefined,
+  timeStr: string | null | undefined,
+  timeZone: string,
+): Date | null {
+  const date = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr || "").trim());
+  const time = /^(\d{1,2}):(\d{2})/.exec(String(timeStr || "").trim());
+  if (!date || !time) return null;
+  const zone = timeZone.trim() || "America/New_York";
+  const year = Number(date[1]);
+  const month = Number(date[2]);
+  const day = Number(date[3]);
+  const hour = Number(time[1]);
+  const minute = Number(time[2]);
+  if (hour > 23 || minute > 59) return null;
+  let utc = Date.UTC(year, month - 1, day, hour, minute, 0);
+  try {
+    for (let i = 0; i < 2; i += 1) {
+      const offset = wallClockUtc(new Date(utc), zone) - utc;
+      utc = Date.UTC(year, month - 1, day, hour, minute, 0) - offset;
+    }
+  } catch {
+    return null;
+  }
+  return new Date(utc);
 }
 
 export function clientJobConfirmedSms(notice: JobNotice): string {
