@@ -7,13 +7,16 @@ import {
   employeeJobAssignedSms,
   formatJobClock,
   isJobConfirmation,
+  isJobReschedule,
   jobFrequencyLabel,
   jobHasDeposit,
   jobPropertyAddress,
   jobServiceLabel,
   ownerJobConfirmedSms,
   renderJobNoticeEmail,
+  renderJobRescheduleEmail,
   type JobNotice,
+  type JobReminderDeposit,
 } from "../_shared/jobConfirmationCard.ts";
 import { jobOrigin, logJobMessage } from "../_shared/jobMessageLog.ts";
 import { resolveJobPdfUrl } from "../_shared/resolveQuickQuoteViewUrl.ts";
@@ -398,6 +401,35 @@ async function resolveInvoicePaymentLink(
   return `${publicAppUrl}/invoice/payment/${invoice.payment_token || invoice.id}`;
 }
 
+async function resolveRescheduleDeposit(
+  supabase: ReturnType<typeof createClient>,
+  job: JobRow,
+): Promise<{ state: JobReminderDeposit; payUrl: string | null }> {
+  if (!jobHasDeposit(job.deposit_required, job.deposit_amount) || !job.deposit_invoice_id) {
+    return jobHasDeposit(job.deposit_required, job.deposit_amount)
+      ? { state: "pending", payUrl: null }
+      : { state: "paid", payUrl: null };
+  }
+
+  const { data: invoice } = await supabase
+    .from("invoices")
+    .select("id, payment_token, status")
+    .eq("id", job.deposit_invoice_id)
+    .maybeSingle();
+
+  if (!invoice || invoice.status === "Paid" || invoice.status === "Cancelled") {
+    return { state: "paid", payUrl: null };
+  }
+
+  const publicAppUrl = Deno.env.get("PUBLIC_APP_URL") ||
+    Deno.env.get("APP_URL") ||
+    "https://app.staging.thunderpro.co";
+  return {
+    state: "pending",
+    payUrl: `${publicAppUrl}/invoice/payment/${invoice.payment_token || invoice.id}`,
+  };
+}
+
 async function resolveDepositPaymentLink(
   supabase: ReturnType<typeof createClient>,
   depositInvoiceId: string | null | undefined,
@@ -704,6 +736,26 @@ serve(async (req) => {
         await sendEmailViaSMTP(row.client_email, clientMail.subject, clientMail.html, ownerEmail);
         sent.push("client");
         logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "sent", template: "job_cancelled" });
+      }
+    } else if (isJobReschedule(prev, newStatus)) {
+      const deposit = await resolveRescheduleDeposit(supabase, row);
+      const notice = confirmationNotice(row, companyName, timezone, deposit.payUrl);
+      const template = deposit.state === "pending" ? "job_rescheduled_deposit_pending" : "job_rescheduled_deposit_paid";
+      const ownerFirst = personFirstName(profile?.first_name) || "there";
+      const ownerMail = renderJobRescheduleEmail("owner", ownerFirst, notice, deposit.state);
+      await sendEmailViaSMTP(ownerEmail, ownerMail.subject, ownerMail.html, ownerEmail);
+      sent.push("owner");
+      logJobMessage("status_email", { ...base, audience: "owner", channel: "email", result: "sent", template });
+
+      if (!row.client_email) {
+        logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "skipped", reason: "no_client_email" });
+      } else if (!shouldSendClientEmail(clientChannel)) {
+        logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "skipped", reason: "client_channel", clientChannel: clientChannel ?? null });
+      } else {
+        const clientMail = renderJobRescheduleEmail("client", personFirstName(row.client_name) || "there", notice, deposit.state);
+        await sendEmailViaSMTP(row.client_email, clientMail.subject, clientMail.html, ownerEmail);
+        sent.push("client");
+        logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "sent", template });
       }
     } else {
     const ownerMail = buildOwnerEmail(row, companyName, prev, newStatus);

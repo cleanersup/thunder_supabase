@@ -204,7 +204,8 @@ The function skips `upcoming` → `today`, `today` → `missed`, and `upcoming` 
 | That confirmation | Owner | SMS | {company}: Hi {name}, the job for {client} has been confirmed and assigned to your team | `send-job-status-emails` |
 | Publish from `draft` with employees assigned | Employee | Email | You've been assigned a new job — {company}. Banner ASSIGNED JOB | `notify-job-employees` |
 | That publish | Employee | SMS | {company}: Hi {name}, you've been assigned a new job for {client} | `notify-job-employees` |
-| Status becomes `upcoming` from `upcoming`, `today`, `ongoing`, or `missed` | Customer | Email | Your job has been rescheduled — {company} | `send-job-status-emails` |
+| Reschedule of an `upcoming`, `today`, `ongoing`, or `missed` job | Customer | Email | Your job has been rescheduled — {company}. Banner JOB RESCHEDULED. Pay Deposit and Download PDF when the deposit is still unpaid | `send-job-status-emails` |
+| That reschedule | Owner | Email | {client}'s job has been rescheduled — {company}. Banner JOB RESCHEDULED. Pending Deposit when the deposit is still unpaid | `send-job-status-emails` |
 | `completed` | Customer | Email | Your job has been completed — {company}. May include View invoice and pay | `send-job-status-emails` |
 | `cancelled` | Customer | Email | Your job has been cancelled — {company} | `send-job-status-emails` |
 | Any other status change the function does not skip | Owner | Email | Job {number} status {status} — {company}, or Job {number} completed | `send-job-status-emails` |

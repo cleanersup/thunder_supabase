@@ -4,6 +4,7 @@ import {
   clientJobConfirmedSms,
   employeeJobAssignedSms,
   isJobConfirmation,
+  isJobReschedule,
   jobDepositLabel,
   jobFrequencyLabel,
   jobPropertyAddress,
@@ -12,6 +13,7 @@ import {
   isWithinOneHourReminderWindow,
   jobStartUtc,
   renderJobReminderEmail,
+  renderJobRescheduleEmail,
   type JobNotice,
 } from "./jobConfirmationCard.ts";
 
@@ -213,6 +215,45 @@ test("today reminder with a paid deposit omits the deposit line and the buttons"
   assert.doesNotMatch(client.html, /Deposit/);
   assert.doesNotMatch(client.html, /Pay Deposit/);
   assert.doesNotMatch(client.html, /Download PDF/);
+});
+
+test("owner reschedule with a pending deposit shows the deposit and no buttons", () => {
+  const { subject, html } = renderJobRescheduleEmail("owner", "Javier", notice, "pending");
+  assert.match(subject, /Pedro's job has been rescheduled/);
+  assert.match(html, />JOB RESCHEDULED</);
+  assert.match(html, /Hello Javier,/);
+  assert.match(html, /Pedro's job has been rescheduled\. You can review the updated date and time/);
+  assert.match(html, /Pending Deposit :<\/span> \$100/);
+  assert.doesNotMatch(html, /<span style="font-weight:700;">Deposit :<\/span>/);
+  assert.doesNotMatch(html, /Pay Deposit/);
+  assert.doesNotMatch(html, /Download PDF/);
+  assert.doesNotMatch(html, /CONFIRMATION RESCHEDULE/);
+});
+
+test("client reschedule with a pending deposit offers pay and the PDF", () => {
+  const { subject, html } = renderJobRescheduleEmail("client", "Pedro", notice, "pending");
+  assert.match(subject, /Your job has been rescheduled/);
+  assert.match(html, /Your job has been rescheduled by our team/);
+  assert.match(html, /Thank you for choosing Clean Up Company!/);
+  assert.match(html, /Deposit :<\/span> \$100/);
+  assert.match(html, /Pay Deposit/);
+  assert.match(html, /background-color:#239445/);
+  assert.match(html, /Download PDF/);
+});
+
+test("reschedule with a paid deposit omits the deposit line and the buttons", () => {
+  const owner = renderJobRescheduleEmail("owner", "Javier", notice, "paid");
+  const client = renderJobRescheduleEmail("client", "Pedro", notice, "paid");
+  assert.match(owner.html, /Pedro's job has been rescheduled/);
+  assert.match(client.html, /Thank you for choosing Clean Up Company!/);
+  assert.match(client.html, /Name :<\/span> Pedro Cisneros/);
+  assert.doesNotMatch(owner.html, /Deposit/);
+  assert.doesNotMatch(client.html, /Deposit/);
+  assert.doesNotMatch(client.html, /Pay Deposit/);
+  assert.doesNotMatch(client.html, /Download PDF/);
+  assert.equal(isJobReschedule("upcoming", "upcoming"), true);
+  assert.equal(isJobReschedule("missed", "upcoming"), true);
+  assert.equal(isJobReschedule("draft", "upcoming"), false);
 });
 
 test("the today reminder is due one hour before the start", () => {

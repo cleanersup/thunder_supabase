@@ -37,6 +37,14 @@ export interface JobNotice {
   pdfUrl: string | null;
 }
 
+const RESCHEDULE_FROM = new Set(["upcoming", "today", "ongoing", "missed"]);
+
+export function isJobReschedule(previousStatus: string | null | undefined, newStatus: string): boolean {
+  const next = String(newStatus || "").toLowerCase();
+  if (next !== "upcoming" && next !== "today") return false;
+  return RESCHEDULE_FROM.has(String(previousStatus || "").toLowerCase());
+}
+
 export function isJobConfirmation(previousStatus: string | null | undefined, newStatus: string): boolean {
   if (newStatus !== "upcoming" && newStatus !== "today") return false;
   const previous = previousStatus || "";
@@ -285,6 +293,62 @@ ${copy.map((text, index) => {
     subject,
     html: renderBrandedEmailCard({
       banner: when === "today" ? "JOB REMINDER TODAY" : "JOB REMINDER TOMORROW",
+      introHtml,
+      linesHtml: `${contact}${spacer}${schedule}`,
+      actionsHtml: actions.join(""),
+    }),
+  };
+}
+
+function rescheduleParagraphs(audience: "owner" | "client", notice: JobNotice): string[] {
+  const company = companyOf(notice);
+  const client = clientOf(notice);
+  if (audience === "owner") {
+    return [
+      `${client}'s job has been rescheduled. You can review the updated date and time in your Thunder Pro account.`,
+    ];
+  }
+  return [
+    "Your job has been rescheduled by our team. Please review the updated date and time for your service.",
+    `Thank you for choosing ${company}! We look forward to providing you with great service.`,
+  ];
+}
+
+export function renderJobRescheduleEmail(
+  audience: "owner" | "client",
+  greetingName: string,
+  notice: JobNotice,
+  deposit: JobReminderDeposit,
+): { subject: string; html: string } {
+  const hello = greetingName.trim() || "there";
+  const company = companyOf(notice);
+  const client = clientOf(notice);
+  const copy = rescheduleParagraphs(audience, notice);
+  const introHtml = `<p style="margin:0 0 14px 0;font-size:14px;line-height:1.5;">Hello ${escapeHtml(hello)},</p>
+${copy.map((text, index) => {
+    const margin = index === copy.length - 1 ? "0 0 22px 0" : "0 0 14px 0";
+    return `<p style="margin:${margin};font-size:14px;line-height:1.55;">${escapeHtml(text)}</p>`;
+  }).join("")}`;
+
+  const contact = contactLines(notice, true);
+  const schedule = reminderScheduleLines(notice, audience, deposit);
+  const spacer = `<p style="margin:0 0 14px 0;font-size:8px;line-height:8px;">&nbsp;</p>`;
+  const actions: string[] = [];
+  if (audience === "client" && deposit === "pending" && notice.payDepositUrl) {
+    actions.push(emailActionButton(notice.payDepositUrl, "Pay Deposit", EMAIL_GREEN));
+  }
+  if (audience === "client" && deposit === "pending" && notice.pdfUrl) {
+    actions.push(emailActionButton(notice.pdfUrl, "Download PDF", EMAIL_NAVY));
+  }
+
+  const subject = audience === "owner"
+    ? `${client}'s job has been rescheduled — ${company}`
+    : `Your job has been rescheduled — ${company}`;
+
+  return {
+    subject,
+    html: renderBrandedEmailCard({
+      banner: "JOB RESCHEDULED",
       introHtml,
       linesHtml: `${contact}${spacer}${schedule}`,
       actionsHtml: actions.join(""),
