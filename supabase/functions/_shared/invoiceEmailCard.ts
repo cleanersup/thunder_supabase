@@ -94,3 +94,77 @@ ${statusHtml}<p style="margin:0 0 22px 0;font-size:14px;line-height:1.55;">${esc
     trackingPixelUrl: input.trackingPixelUrl,
   });
 }
+
+export interface InvoiceReminderInput {
+  audience: InvoiceEmailAudience;
+  companyName: string;
+  greetingName: string;
+  clientName: string;
+  clientFirstName: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  dueDate: string;
+  serviceType: string;
+  amountDue: string;
+  contact: DocumentEmailContact;
+  payUrl: string | null;
+  trackingPixelUrl?: string | null;
+}
+
+function reminderCopy(input: InvoiceReminderInput): string[] {
+  const company = input.companyName.trim() || "your cleaning company";
+  const client = input.clientName.trim() || input.clientFirstName.trim() || "your client";
+  if (input.audience === "owner") {
+    return [`A payment reminder was sent to ${client} for the following invoice.`];
+  }
+  return [
+    "Payment Due Today. This invoice is due today. Please submit payment to avoid late fees.",
+    `This is a friendly reminder that your invoice from ${company} is due today.`,
+    `If you have any questions, please contact us at ${company}.`,
+  ];
+}
+
+/** Due-today reminder. Same card as the invoice that was sent. Pay Now stays on the payment page. */
+export function renderInvoiceReminderEmail(input: InvoiceReminderInput): { subject: string; html: string } {
+  const hello = input.greetingName.trim() || "there";
+  const company = input.companyName.trim() || "your cleaning company";
+  const clientLabel = input.clientName.trim() || input.clientFirstName.trim() || "your client";
+  const copy = reminderCopy(input);
+  const introHtml = `<p style="margin:0 0 14px 0;font-size:14px;line-height:1.5;">Hello ${escapeHtml(hello)},</p>
+${copy.map((text, index) => {
+    const margin = index === copy.length - 1 ? "0 0 22px 0" : "0 0 14px 0";
+    return `<p style="margin:${margin};font-size:14px;line-height:1.55;">${escapeHtml(text)}</p>`;
+  }).join("")}`;
+
+  const lines = [
+    emailDetailLine("Invoice Number", input.invoiceNumber),
+    emailDetailLine("Invoice Date", input.invoiceDate),
+    emailDetailLine("Due Date", input.dueDate),
+    emailDetailLine("Service Type", input.serviceType),
+    emailDetailLine("Total Amount Due", input.amountDue),
+    `<p style="margin:0 0 14px 0;font-size:8px;line-height:8px;">&nbsp;</p>`,
+    emailDetailLine("Name", input.contact.name),
+    emailDetailLine("Email", input.contact.email),
+    emailDetailLine("Phone", input.contact.phone),
+    emailDetailLine("Address", input.contact.address),
+  ].join("");
+
+  const actions = input.audience === "client" && input.payUrl
+    ? emailActionButton(input.payUrl, "Pay Now", EMAIL_GREEN)
+    : "";
+
+  const subject = input.audience === "owner"
+    ? `A reminder invoice was sent to ${clientLabel}`
+    : `${company} sent you a invoice reminder`;
+
+  return {
+    subject,
+    html: renderBrandedEmailCard({
+      banner: "INVOICE",
+      introHtml,
+      linesHtml: lines,
+      actionsHtml: actions,
+      trackingPixelUrl: input.trackingPixelUrl,
+    }),
+  };
+}

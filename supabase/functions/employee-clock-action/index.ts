@@ -416,6 +416,12 @@ serve(async (req) => {
             job_id ??
             null;
           if (linkedJobId) {
+            const { data: jobBefore } = await supabase
+              .from("jobs")
+              .select("status")
+              .eq("id", linkedJobId)
+              .maybeSingle();
+            const previousStatus = String(jobBefore?.status || "");
             const { error: jobError } = await supabase
               .from("jobs")
               .update({ status: "completed" })
@@ -423,8 +429,15 @@ serve(async (req) => {
               .not("status", "in", '("completed","cancelled")');
             if (jobError) {
               console.error(`Failed to mark job ${linkedJobId} completed on clock-out:`, jobError);
-            } else {
+            } else if (previousStatus && previousStatus !== "completed" && previousStatus !== "cancelled") {
               console.log(`Job ${linkedJobId} marked completed after clock-out`);
+              supabase.functions.invoke("send-job-status-emails", {
+                body: {
+                  jobId: linkedJobId,
+                  previousStatus,
+                  newStatus: "completed",
+                },
+              }).catch((err) => console.error("Error sending job completion email:", err));
             }
           }
 

@@ -65,6 +65,17 @@ scp -r dist/* admin@thunderpro.staging.thunderpro.co:/home/admin/swift-slate/dis
 #DEPLOY BUILD TO PROD OF CODE
 scp -r dist/* admin@thunderpro.thunderpro.co:/home/admin/swift-slate/dist
 
+#FOR NEW CONTAINERS COMMANDS WITH FIX
+
+#Stop it:
+docker stop supabase_edge_runtime_euydrdzayvjahstvmwoj
+
+#Start it again:
+docker start supabase_edge_runtime_euydrdzayvjahstvmwoj
+
+#Stop and start it in one step:
+docker restart supabase_edge_runtime_euydrdzayvjahstvmwoj
+
 #SEE SUPABASE LOGS
 docker logs supabase_edge_runtime_euydrdzayvjahstvmwoj --follow
 

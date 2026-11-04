@@ -165,10 +165,10 @@ The quote text still says "cleaning estimate". The email subject says Quote. The
 | Owner texts an update | Customer | SMS | Hi {name}, your invoice{total} has updates and is ready. View it here: {pdf url} | `send-invoice-sms` |
 | Invoice is paid (Stripe checkout, saved card, or `process-invoice-payment`) | Customer | Email | Payment received — Invoice {number} | `send-invoice-email` with `isPaymentConfirmation` |
 | Invoice is paid | Owner | Email | Invoice paid: {number} — {client} | `send-invoice-email` with `isPaymentConfirmation` |
-| Due today, once a day at 9:00 UTC, or the owner taps Remind | Customer | Email | {company} sent you a invoice reminder | `send-invoice-reminders` |
-| That reminder | Owner | Email | A reminder invoice was sent to {client} | `send-invoice-reminders` |
+| Due today, once a day at 9:00 UTC, or the owner taps Remind | Customer | Email | {company} sent you a invoice reminder. Banner INVOICE. Pay Now opens the payment page | `send-invoice-reminders` |
+| That reminder | Owner | Email | A reminder invoice was sent to {client}. A payment reminder was sent to {client} for the following invoice | `send-invoice-reminders` |
 
-The invoice email has Pay (`/invoice/payment/:token`) and Download PDF (`download-invoice-pdf`). The text opens the PDF. The reminder email keeps Pay Now on the payment page. There is no invoice reminder SMS.
+The invoice email has Pay (`/invoice/payment/:token`) and Download PDF (`download-invoice-pdf`). The text opens the PDF. The reminder uses the same invoice card. The customer reminder has Pay Now on the payment page and does not include Download PDF. The owner reminder has no button. There is no invoice reminder SMS.
 
 ### Jobs
 
@@ -206,7 +206,7 @@ The function skips `upcoming` → `today`, `today` → `missed`, and `upcoming` 
 | That publish | Employee | SMS | {company}: Hi {name}, you've been assigned a new job for {client} | `notify-job-employees` |
 | Reschedule of an `upcoming`, `today`, `ongoing`, or `missed` job | Customer | Email | Your job has been rescheduled — {company}. Banner JOB RESCHEDULED. Pay Deposit and Download PDF when the deposit is still unpaid | `send-job-status-emails` |
 | That reschedule | Owner | Email | {client}'s job has been rescheduled — {company}. Banner JOB RESCHEDULED. Pending Deposit when the deposit is still unpaid | `send-job-status-emails` |
-| `completed` | Customer | Email | Your job has been completed — {company}. May include View invoice and pay | `send-job-status-emails` |
+| `completed` | Customer | Email | Your job has been completed — {company}. Banner JOB COMPLETED. No buttons. Remaining-balance copy when the deposit invoice is Paid; otherwise the full invoice is still due | `send-job-status-emails` |
 | `cancelled` | Customer | Email | Your job has been cancelled — {company} | `send-job-status-emails` |
 | Any other status change the function does not skip | Owner | Email | Job {number} status {status} — {company}, or Job {number} completed | `send-job-status-emails` |
 | `upcoming` that is not a first confirmation, or `cancelled` | Employee | Email | Job assigned — {number} / Job cancelled — {number} | `send-job-status-emails` |
@@ -226,7 +226,7 @@ Publishing from the owner app calls `send-job-status-emails` with the status the
 
 On confirmation, the customer email is sent when `jobs.client_email` is set and `client_notification_channel` is null, `email`, or `both`. The customer SMS is sent when `jobs.client_phone` is set and the channel is null, `sms`, or `both`. Neither app writes that column, so it stays null and both go out. Other statuses still email the customer only when the channel is null or `email`.
 
-`send-job-status-sms` still texts the customer for `upcoming`, `cancelled`, and `completed`, and uses the confirmation sentence when the job is first published. The confirmation SMS itself is sent by `send-job-status-emails`, so the apps do not call the SMS function. Download PDF on the client and owner confirmation opens `download-job-pdf` inline, using the job id as the token. The sheet follows the estimate PDF. Pay Deposit opens the deposit invoice payment page. That invoice is created as Pending, stays on `jobs.deposit_invoice_id`, and becomes Paid when Stripe confirms the payment. Paying it sends the DEPOSIT PAID card to the client and the owner. Cancelling the job sends the JOB CANCELLED card to the client and the owner. Both cards include Download PDF.
+`send-job-status-sms` still texts the customer for `upcoming`, `cancelled`, and `completed`, and uses the confirmation sentence when the job is first published. The confirmation SMS itself is sent by `send-job-status-emails`, so the apps do not call the SMS function. Download PDF on the client and owner confirmation opens `download-job-pdf` inline, using the job id as the token. The sheet follows the estimate PDF. Pay Deposit opens the deposit invoice payment page. That invoice is created as Pending, stays on `jobs.deposit_invoice_id`, and becomes Paid when Stripe confirms the payment. Paying it sends the DEPOSIT PAID card to the client and the owner. Cancelling the job sends the JOB CANCELLED card to the client and the owner. Both cards include Download PDF. Completing the job sends the JOB COMPLETED card to the customer only. A Paid deposit invoice uses the remaining-balance sentence. Any other deposit state reminds the customer that the job invoice still needs to be paid. Both completion cards say the invoice will be sent shortly, and neither has a button. The owner completion email stays on the older template.
 
 A job published for today (`draft` → `today`) uses the confirmation card. `upcoming` → `today`, `missed`, and `ongoing` do not email the customer. `upcoming` → `today` and the missed moves send nothing.
 
@@ -236,7 +236,7 @@ The day-before reminder emails the owner and the customer at 9:00 UTC with the J
 
 Each send writes a line to the edge-runtime log starting with `[job-message]`. `origin` is `converted_estimate` when the job has `estimate_id`, `converted_walkthrough` when it has `walkthrough_id`, and `created` when the owner made the job directly. Filter with `docker logs supabase_edge_runtime_euydrdzayvjahstvmwoj 2>&1 | grep job-message`.
 
-Clock-in writes an in-app notification for the owner (`job_started`) and does not change the job status. `send-clock-notifications` emails the owner and the customer only when the time entry is linked to a `route_appointments` row. A job clock-in from the employee app sends `job_id` and does not take that path. Clock-out sets the job to `completed`, which is a normal status email.
+Clock-in writes an in-app notification for the owner (`job_started`) and does not change the job status. `send-clock-notifications` emails the owner and the customer only when the time entry is linked to a `route_appointments` row. A job clock-in from the employee app sends `job_id` and does not take that path. Clock-out sets the job to `completed` and calls `send-job-status-emails`, which sends the JOB COMPLETED card. The status trigger can send that same email again.
 
 ### Schedule
 

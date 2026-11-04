@@ -4,6 +4,8 @@ import * as Sentry from "npm:@sentry/deno";
 import { resolvePublicSupabaseUrl } from "../_shared/resolvePublicSupabaseUrl.ts";
 import { resolvePublicAppUrl } from "../_shared/resolvePublicAppUrl.ts";
 import { formatDateOnlyLong } from "../_shared/formatDateOnly.ts";
+import { formatPhoneDisplay, formatStreetAddress, personFirstName } from "../_shared/documentEmailCard.ts";
+import { renderInvoiceReminderEmail } from "../_shared/invoiceEmailCard.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -262,7 +264,7 @@ serve(async (req) => {
           // Fetch company profile
           const { data: profile, error: profileError } = await supabase
             .from('profiles')
-            .select('company_name, company_email, company_phone, company_logo, timezone')
+            .select('first_name, last_name, company_name, company_email, company_phone, company_address, company_apt_suite, company_city, company_state, company_zip, timezone')
             .eq('user_id', invoice.user_id)
             .single();
 
@@ -283,221 +285,87 @@ serve(async (req) => {
           const invoiceDateFormatted = formatDateInTimezone(invoice.invoice_date, userTimezone);
           const dueDateFormatted = formatDateInTimezone(invoice.due_date, userTimezone);
 
-          // Since we're only checking for due_date = today, this is a due date reminder
-          const dueDateNotice = `<div style="background:#fef3c7;border-left:4px solid #f59e0b;padding:12px;margin:20px 0">
-          <p style="margin:0;font-weight:bold;color:#d97706">⏰ Payment Due Today</p>
-          <p style="margin:5px 0 0 0;font-size:13px;color:#d97706">This invoice is due today. Please submit payment to avoid late fees.</p>
-        </div>`;
-
-          const publicAppUrlEnv = Deno.env.get('PUBLIC_APP_URL');
-          const appUrlEnv = Deno.env.get('APP_URL');
-          const supabaseUrlEnv = Deno.env.get('SUPABASE_URL');
-
-          console.log(`=== Payment Link Debug (Invoice ${invoice.invoice_number}) ===`);
-          console.log('PUBLIC_APP_URL from env:', publicAppUrlEnv || 'NOT SET');
-          console.log('APP_URL from env:', appUrlEnv || 'NOT SET');
-          console.log('SUPABASE_URL from env:', supabaseUrlEnv || 'NOT SET');
+          const f = (n: number) => `$${Number(n).toFixed(2)}`;
+          const amount = Number(invoice.total);
+          const amountDue = Number.isFinite(amount) ? f(amount) : "";
+          const clientFirst = personFirstName(invoice.client_name);
+          const ownerName = [profile.first_name, profile.last_name].filter(Boolean).join(" ").trim();
+          const clientContact = {
+            name: String(invoice.client_name || ""),
+            email: String(invoice.email || ""),
+            phone: formatPhoneDisplay(invoice.phone),
+            address: formatStreetAddress([
+              invoice.address,
+              invoice.apt,
+              invoice.city,
+              invoice.state,
+              invoice.zip,
+            ]),
+          };
+          const ownerContact = {
+            name: ownerName || companyName,
+            email: String(companyEmail || ""),
+            phone: formatPhoneDisplay(profile.company_phone),
+            address: formatStreetAddress([
+              profile.company_address,
+              profile.company_apt_suite,
+              profile.company_city,
+              profile.company_state,
+              profile.company_zip,
+            ]),
+          };
 
           const publicAppUrl = resolvePublicAppUrl();
-          // Use payment_token (opaque) instead of raw UUID to prevent URL enumeration
           const paymentLink = `${publicAppUrl}/invoice/payment/${invoice.payment_token || invoice.id}`;
-
-          // Public URL for tracking pixel and edge function links
           const publicSupabaseUrl = resolvePublicSupabaseUrl();
+          const trackingPixelUrl = `${publicSupabaseUrl}/functions/v1/mark-viewed?type=invoice&id=${invoice.id}`;
+          console.log("Invoice reminder payment link:", paymentLink);
 
-          console.log('Selected publicAppUrl:', publicAppUrl);
-          console.log('Public Supabase URL for invoice reminder links:', publicSupabaseUrl);
-          console.log('Generated paymentLink:', paymentLink);
-          console.log('=== End Payment Link Debug ===');
-
-          const f = (n: number) => `$${n.toFixed(2)}`;
-
-          // Email template for CLIENT (with Pay Now button)
-          const clientReminderEmailHtml = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-@media only screen and (max-width: 600px) {
-  .email-container {
-    max-width: 100% !important;
-  }
-  .email-body {
-    padding: 10px !important;
-  }
-  .email-content {
-    padding: 10px !important;
-  }
-}
-</style>
-</head>
-<body style="margin:0;padding:20px;font-family:Arial,sans-serif">
-<div class="email-container" style="max-width:600px;margin:0 auto">
-
-<div class="email-body" style="text-align:center;padding:15px;background:#1e3a8a;color:white">
-<h1 style="margin:0;font-size:22px">${companyName}</h1>
-<p style="margin:5px 0">Payment Reminder</p>
-</div>
-
-<div class="email-content" style="padding:15px">
-
-${dueDateNotice}
-
-<p>Hello ${invoice.client_name},</p>
-<p>This is a friendly reminder that your invoice from <strong>${companyName}</strong> is due today.</p>
-
-<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Invoice Details</h3>
-<div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div>
-<p><strong>Invoice Number:</strong> ${invoice.invoice_number}<br>
-<strong>Invoice Date:</strong> ${invoiceDateFormatted}<br>
-<strong>Due Date:</strong> ${dueDateFormatted}<br>
-<strong>Service Type:</strong> ${invoice.service_type}</p>
-
-${invoice.notes ? `<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Notes</h3><div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div><p>${invoice.notes}</p>` : ''}
-
-<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Amount Due</h3>
-<table cellpadding="0" cellspacing="0" style="width:100%;background-color:#f0fdf4">
-  <tr>
-    <td style="padding:16px">
-      <table cellpadding="0" cellspacing="0" style="width:100%">
-        <tr>
-          <td style="padding:12px 0 0 0;text-align:left;font-weight:bold;font-size:20px;color:#1e3a8a">Total Amount Due:</td>
-          <td style="padding:12px 0 0 0;text-align:right;font-weight:bold;font-size:20px;color:#1e3a8a">${f(invoice.total)}</td>
-        </tr>
-      </table>
-    </td>
-  </tr>
-</table>
-
-<div style="text-align:center;margin:30px 0">
-<a href="${paymentLink}" style="display:inline-block;background:#10b981;color:white;padding:15px 40px;text-decoration:none;border-radius:5px;font-weight:bold;margin:10px">Pay Now</a>
-</div>
-
-<div style="background:#eff6ff;border-left:4px solid #3b82f6;padding:12px;margin:20px 0">
-<p style="margin:0;font-size:13px;color:#1e40af">💡 If you have already submitted payment, please disregard this reminder.</p>
-</div>
-
-<p style="margin-top:20px;font-size:14px;">If you have any questions, please contact us at ${companyName}.</p>
-
-</div>
-
-<div style="text-align:center;padding:15px;background:#1e3a8a;color:white">
-<p style="margin:0 0 5px 0;font-size:12px">Service provided by</p>
-<p style="margin:0">© 2024 Thunder Pro Inc. | <a href="https://www.thunderpro.co" style="color:white">www.thunderpro.co</a></p>
-</div>
-
-</div>
-<img src="${publicSupabaseUrl}/functions/v1/mark-viewed?type=invoice&id=${invoice.id}" width="1" height="1" style="display:none" alt="" />
-</body>
-</html>`;
-
-          // Email template for OWNER (same design as client, NO Pay Now button)
-          const ownerNotificationEmailHtml = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-@media only screen and (max-width: 600px) {
-  .email-container {
-    max-width: 100% !important;
-  }
-  .email-body {
-    padding: 10px !important;
-  }
-  .email-content {
-    padding: 10px !important;
-  }
-}
-</style>
-</head>
-<body style="margin:0;padding:20px;font-family:Arial,sans-serif">
-<div class="email-container" style="max-width:600px;margin:0 auto">
-
-<div class="email-body" style="text-align:center;padding:15px;background:#1e3a8a;color:white">
-<h1 style="margin:0;font-size:22px">${companyName}</h1>
-<p style="margin:5px 0">Payment Reminder Sent</p>
-</div>
-
-<div class="email-content" style="padding:15px">
-
-<div style="background:#d1fae5;border-left:4px solid #10b981;padding:12px;margin:20px 0">
-<p style="margin:0;font-weight:bold;color:#047857">✓ Reminder Sent to Client</p>
-<p style="margin:5px 0 0 0;font-size:13px;color:#047857">A payment reminder was automatically sent to ${invoice.client_name}</p>
-</div>
-
-<p>Hello,</p>
-<p>A payment reminder was sent to <strong>${invoice.client_name}</strong> for the following invoice:</p>
-
-<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Invoice Details</h3>
-<div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div>
-<p><strong>Invoice Number:</strong> ${invoice.invoice_number}<br>
-<strong>Client:</strong> ${invoice.client_name}<br>
-<strong>Email:</strong> ${invoice.email}<br>
-<strong>Invoice Date:</strong> ${invoiceDateFormatted}<br>
-<strong>Due Date:</strong> ${dueDateFormatted}<br>
-<strong>Service Type:</strong> ${invoice.service_type}</p>
-
-${invoice.notes ? `<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Notes</h3><div style="border-top:1px solid #1e3a8a;margin-bottom:12px"></div><p>${invoice.notes}</p>` : ''}
-
-<h3 style="color:#1e3a8a;margin:20px 0 8px 0">Amount Due</h3>
-<table cellpadding="0" cellspacing="0" style="width:100%;background-color:#f0fdf4">
-  <tr>
-    <td style="padding:16px">
-      <table cellpadding="0" cellspacing="0" style="width:100%">
-        <tr>
-          <td style="padding:12px 0 0 0;text-align:left;font-weight:bold;font-size:20px;color:#1e3a8a">Total Amount Due:</td>
-          <td style="padding:12px 0 0 0;text-align:right;font-weight:bold;font-size:20px;color:#1e3a8a">${f(invoice.total)}</td>
-        </tr>
-      </table>
-    </td>
-  </tr>
-</table>
-
-<div style="background:#eff6ff;border-left:4px solid #3b82f6;padding:12px;margin:20px 0">
-<p style="margin:0;font-size:13px;color:#1e40af">💡 This is an automated notification. The client has received a payment reminder with a link to pay online.</p>
-</div>
-
-</div>
-
-<div style="text-align:center;padding:15px;background:#1e3a8a;color:white">
-<p style="margin:0 0 5px 0;font-size:12px">Service provided by</p>
-<p style="margin:0">© 2024 Thunder Pro Inc. | <a href="https://www.thunderpro.co" style="color:white">www.thunderpro.co</a></p>
-</div>
-
-</div>
-</body>
-</html>`;
-
-
-          const clientSubject = `${companyName} sent you a invoice reminder`;
-          const ownerSubject = `A reminder invoice was sent to ${invoice.client_name}`;
+          const reminderBase = {
+            companyName,
+            clientName: String(invoice.client_name || ""),
+            clientFirstName: clientFirst,
+            invoiceNumber: String(invoice.invoice_number || ""),
+            invoiceDate: invoiceDateFormatted === "N/A" ? "" : invoiceDateFormatted,
+            dueDate: dueDateFormatted === "N/A" ? "" : dueDateFormatted,
+            serviceType: String(invoice.service_type || ""),
+            amountDue,
+          };
+          const clientReminder = renderInvoiceReminderEmail({
+            ...reminderBase,
+            audience: "client",
+            greetingName: clientFirst,
+            contact: ownerContact,
+            payUrl: paymentLink,
+            trackingPixelUrl,
+          });
+          const ownerReminder = renderInvoiceReminderEmail({
+            ...reminderBase,
+            audience: "owner",
+            greetingName: personFirstName(profile.first_name),
+            contact: clientContact,
+            payUrl: null,
+          });
 
           console.log(`Sending reminder to client: ${invoice.email} for invoice ${invoice.invoice_number}`);
-
-          // Send email to CLIENT with Pay Now button
           await sendEmailViaSMTP(
             invoice.email,
             null,
-            clientSubject,
-            clientReminderEmailHtml
+            clientReminder.subject,
+            clientReminder.html,
           );
-
           console.log(`✓ Client reminder sent successfully for invoice ${invoice.invoice_number}`);
 
-          // Send notification email to OWNER (if company email is configured)
           if (companyEmail) {
             console.log(`Sending notification to owner: ${companyEmail}`);
             await sendEmailViaSMTP(
               companyEmail,
               null,
-              ownerSubject,
-              ownerNotificationEmailHtml
+              ownerReminder.subject,
+              ownerReminder.html,
             );
             console.log(`✓ Owner notification sent successfully for invoice ${invoice.invoice_number}`);
           }
-
 
           // Notify owner in-app (-> push) that this invoice is due today
           const { error: notifyError } = await supabase.from('notifications').insert({

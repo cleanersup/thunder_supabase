@@ -13,6 +13,7 @@ import {
   jobPropertyAddress,
   jobServiceLabel,
   ownerJobConfirmedSms,
+  renderJobCompletedEmail,
   renderJobNoticeEmail,
   renderJobRescheduleEmail,
   type JobNotice,
@@ -74,7 +75,7 @@ type EmployeeRow = {
 };
 
 const EMPLOYEE_NOTIFY_STATUSES = new Set(["upcoming", "cancelled"]);
-const CLIENT_NOTIFY_STATUSES = new Set(["upcoming", "cancelled", "completed"]);
+const CLIENT_NOTIFY_STATUSES = new Set(["upcoming", "cancelled"]);
 
 function isAutoTemporalTransition(previousStatus: string, newStatus: string): boolean {
   return (
@@ -273,27 +274,10 @@ function buildClientEmail(
   newStatus: string,
   previousStatus: string,
   timezone: string,
-  paymentLink: string | null,
 ): { subject: string; html: string } | null {
   const clientName = job.client_name || "Client";
   const schedule = formatSchedule(job, timezone);
   const address = formatAddress(job) || "N/A";
-
-  if (newStatus === "completed") {
-    const invoiceBlock = paymentLink
-      ? `<p style="margin-top:20px;"><a href="${paymentLink}" style="display:inline-block;background:#1e3a8a;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold;">View invoice and pay</a></p>`
-      : "";
-    return {
-      subject: `Your job has been completed — ${companyName}`,
-      html: wrapEmail(
-        "Job completed",
-        `<p>Hi ${clientName},</p>
-        <p><strong>Your job has been completed.</strong></p>
-        <p>Thank you for choosing ${companyName}. We hope everything met your expectations.</p>
-        ${invoiceBlock}`,
-      ),
-    };
-  }
 
   if (newStatus === "cancelled") {
     return {
@@ -379,26 +363,17 @@ function normalizeEmployeeIds(raw: unknown): string[] {
     .filter((id): id is string => typeof id === "string" && id.length > 0);
 }
 
-async function resolveInvoicePaymentLink(
+async function depositInvoiceWasPaid(
   supabase: ReturnType<typeof createClient>,
-  invoiceIds: string[] | null | undefined,
-): Promise<string | null> {
-  if (!invoiceIds?.length) return null;
-
+  depositInvoiceId: string | null | undefined,
+): Promise<boolean> {
+  if (!depositInvoiceId) return false;
   const { data: invoice } = await supabase
     .from("invoices")
-    .select("id, payment_token")
-    .in("id", invoiceIds)
-    .order("created_at", { ascending: false })
-    .limit(1)
+    .select("status")
+    .eq("id", depositInvoiceId)
     .maybeSingle();
-
-  if (!invoice) return null;
-
-  const publicAppUrl = Deno.env.get("PUBLIC_APP_URL") ||
-    Deno.env.get("APP_URL") ||
-    "https://app.staging.thunderpro.co";
-  return `${publicAppUrl}/invoice/payment/${invoice.payment_token || invoice.id}`;
+  return String(invoice?.status || "").toLowerCase() === "paid";
 }
 
 async function resolveRescheduleDeposit(
@@ -757,6 +732,34 @@ serve(async (req) => {
         sent.push("client");
         logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "sent", template });
       }
+    } else if (newStatus === "completed") {
+      const ownerMail = buildOwnerEmail(row, companyName, prev, newStatus);
+      await sendEmailViaSMTP(ownerEmail, ownerMail.subject, ownerMail.html, ownerEmail);
+      sent.push("owner");
+      logJobMessage("status_email", { ...base, audience: "owner", channel: "email", result: "sent", template: "job_completed" });
+
+      if (!row.client_email) {
+        logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "skipped", reason: "no_client_email" });
+      } else if (!shouldSendClientEmail(clientChannel)) {
+        logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "skipped", reason: "client_channel", clientChannel: clientChannel ?? null });
+      } else {
+        const depositPaid = await depositInvoiceWasPaid(supabase, row.deposit_invoice_id);
+        const notice = confirmationNotice(row, companyName, timezone, null);
+        const clientMail = renderJobCompletedEmail(
+          personFirstName(row.client_name) || "there",
+          notice,
+          depositPaid ? "remaining" : "unpaid",
+        );
+        await sendEmailViaSMTP(row.client_email, clientMail.subject, clientMail.html, ownerEmail);
+        sent.push("client");
+        logJobMessage("status_email", {
+          ...base,
+          audience: "client",
+          channel: "email",
+          result: "sent",
+          template: depositPaid ? "job_completed_deposit_paid" : "job_completed_deposit_unpaid",
+        });
+      }
     } else {
     const ownerMail = buildOwnerEmail(row, companyName, prev, newStatus);
     await sendEmailViaSMTP(ownerEmail, ownerMail.subject, ownerMail.html, ownerEmail);
@@ -770,10 +773,7 @@ serve(async (req) => {
     } else if (!shouldSendClientEmail(clientChannel)) {
       logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "skipped", reason: "client_channel", clientChannel: clientChannel ?? null });
     } else {
-      const paymentLink = newStatus === "completed"
-        ? await resolveInvoicePaymentLink(supabase, row.invoice_ids)
-        : null;
-      const clientMail = buildClientEmail(row, companyName, newStatus, prev, timezone, paymentLink);
+      const clientMail = buildClientEmail(row, companyName, newStatus, prev, timezone);
       if (clientMail) {
         await sendEmailViaSMTP(row.client_email, clientMail.subject, clientMail.html, ownerEmail);
         sent.push("client");

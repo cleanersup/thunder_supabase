@@ -14,6 +14,7 @@ import {
   jobStartUtc,
   renderJobReminderEmail,
   renderJobRescheduleEmail,
+  renderJobCompletedEmail,
   type JobNotice,
 } from "./jobConfirmationCard.ts";
 
@@ -254,6 +255,35 @@ test("reschedule with a paid deposit omits the deposit line and the buttons", ()
   assert.equal(isJobReschedule("upcoming", "upcoming"), true);
   assert.equal(isJobReschedule("missed", "upcoming"), true);
   assert.equal(isJobReschedule("draft", "upcoming"), false);
+});
+
+test("client completed email with no deposit paid has no buttons", () => {
+  const { subject, html } = renderJobCompletedEmail("Pedro", notice, "unpaid");
+  assert.equal(subject, "Your job has been completed — Clean Up Company");
+  assert.match(html, />JOB COMPLETED</);
+  assert.match(html, /Hello Pedro,/);
+  assert.match(html, /you still need to pay the invoice for this job/);
+  assert.match(html, /The invoice will be sent shortly so you can make the payment/);
+  assert.match(html, /Name :<\/span> Pedro Cisneros/);
+  assert.match(html, /Phone :<\/span> \(213\)464-4428/);
+  assert.match(html, /Service Type :<\/span> Residential/);
+  assert.match(html, /Frequency :<\/span> One Time/);
+  assert.doesNotMatch(html, /Deposit/);
+  assert.doesNotMatch(html, /Download PDF/);
+  assert.doesNotMatch(html, /Pay /);
+  assert.doesNotMatch(html, /remaining balance/);
+});
+
+test("client completed email with a paid deposit asks for the remaining balance", () => {
+  const { subject, html } = renderJobCompletedEmail("Pedro", notice, "remaining");
+  assert.equal(subject, "Your job has been completed — Clean Up Company");
+  assert.match(html, />JOB COMPLETED</);
+  assert.match(html, /There is a remaining balance due for this job/);
+  assert.match(html, /An invoice for the remaining balance will be sent shortly/);
+  assert.match(html, /Start Time :<\/span> 8:30 AM/);
+  assert.doesNotMatch(html, /Download PDF/);
+  assert.doesNotMatch(html, /Pay /);
+  assert.doesNotMatch(html, /still need to pay the invoice/);
 });
 
 test("the today reminder is due one hour before the start", () => {

@@ -314,6 +314,49 @@ function rescheduleParagraphs(audience: "owner" | "client", notice: JobNotice): 
   ];
 }
 
+export type JobCompletedBalance = "unpaid" | "remaining";
+
+function completedParagraphs(notice: JobNotice, balance: JobCompletedBalance): string[] {
+  const company = companyOf(notice);
+  if (balance === "remaining") {
+    return [
+      `Your job with ${company} has been completed. There is a remaining balance due for this job.`,
+      `An invoice for the remaining balance will be sent shortly so you can make the payment. Thank you for choosing ${company}!`,
+    ];
+  }
+  return [
+    `Your job with ${company} has been completed. This is a reminder that you still need to pay the invoice for this job.`,
+    `The invoice will be sent shortly so you can make the payment. Thank you for choosing ${company}!`,
+  ];
+}
+
+/** Client completion card. No buttons: the invoice email is sent separately. */
+export function renderJobCompletedEmail(
+  greetingName: string,
+  notice: JobNotice,
+  balance: JobCompletedBalance,
+): { subject: string; html: string } {
+  const hello = greetingName.trim() || "there";
+  const company = companyOf(notice);
+  const copy = completedParagraphs(notice, balance);
+  const introHtml = `<p style="margin:0 0 14px 0;font-size:14px;line-height:1.5;">Hello ${escapeHtml(hello)},</p>
+${copy.map((text, index) => {
+    const margin = index === copy.length - 1 ? "0 0 22px 0" : "0 0 14px 0";
+    return `<p style="margin:${margin};font-size:14px;line-height:1.55;">${escapeHtml(text)}</p>`;
+  }).join("")}`;
+  const spacer = `<p style="margin:0 0 14px 0;font-size:8px;line-height:8px;">&nbsp;</p>`;
+
+  return {
+    subject: `Your job has been completed — ${company}`,
+    html: renderBrandedEmailCard({
+      banner: "JOB COMPLETED",
+      introHtml,
+      linesHtml: `${contactLines(notice, true)}${spacer}${scheduleLines(notice, false)}`,
+      actionsHtml: "",
+    }),
+  };
+}
+
 export function renderJobRescheduleEmail(
   audience: "owner" | "client",
   greetingName: string,
