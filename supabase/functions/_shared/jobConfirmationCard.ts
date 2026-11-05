@@ -316,8 +316,18 @@ function rescheduleParagraphs(audience: "owner" | "client", notice: JobNotice): 
 
 export type JobCompletedBalance = "unpaid" | "remaining";
 
-function completedParagraphs(notice: JobNotice, balance: JobCompletedBalance): string[] {
+function completedParagraphs(
+  audience: "owner" | "client",
+  notice: JobNotice,
+  balance: JobCompletedBalance,
+): string[] {
   const company = companyOf(notice);
+  const client = clientOf(notice);
+  if (audience === "owner") {
+    return [
+      `The job for ${client} has been marked as Completed. You can review the job details in your Thunder Pro account.`,
+    ];
+  }
   if (balance === "remaining") {
     return [
       `Your job with ${company} has been completed. There is a remaining balance due for this job.`,
@@ -330,15 +340,17 @@ function completedParagraphs(notice: JobNotice, balance: JobCompletedBalance): s
   ];
 }
 
-/** Client completion card. No buttons: the invoice email is sent separately. */
+/** Completion card for the owner and the client. No buttons: the invoice email is sent separately. */
 export function renderJobCompletedEmail(
+  audience: "owner" | "client",
   greetingName: string,
   notice: JobNotice,
   balance: JobCompletedBalance,
 ): { subject: string; html: string } {
   const hello = greetingName.trim() || "there";
   const company = companyOf(notice);
-  const copy = completedParagraphs(notice, balance);
+  const client = clientOf(notice);
+  const copy = completedParagraphs(audience, notice, balance);
   const introHtml = `<p style="margin:0 0 14px 0;font-size:14px;line-height:1.5;">Hello ${escapeHtml(hello)},</p>
 ${copy.map((text, index) => {
     const margin = index === copy.length - 1 ? "0 0 22px 0" : "0 0 14px 0";
@@ -347,7 +359,9 @@ ${copy.map((text, index) => {
   const spacer = `<p style="margin:0 0 14px 0;font-size:8px;line-height:8px;">&nbsp;</p>`;
 
   return {
-    subject: `Your job has been completed — ${company}`,
+    subject: audience === "owner"
+      ? `The job for ${client} has been completed — ${company}`
+      : `Your job has been completed — ${company}`,
     html: renderBrandedEmailCard({
       banner: "JOB COMPLETED",
       introHtml,

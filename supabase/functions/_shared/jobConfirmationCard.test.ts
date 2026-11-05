@@ -257,8 +257,23 @@ test("reschedule with a paid deposit omits the deposit line and the buttons", ()
   assert.equal(isJobReschedule("draft", "upcoming"), false);
 });
 
+test("owner completed email uses the job card", () => {
+  const { subject, html } = renderJobCompletedEmail("owner", "Javier", notice, "unpaid");
+  assert.equal(subject, "The job for Pedro has been completed — Clean Up Company");
+  assert.match(html, />JOB COMPLETED</);
+  assert.match(html, /Hello Javier,/);
+  assert.match(html, /The job for Pedro has been marked as Completed/);
+  assert.match(html, /review the job details in your Thunder Pro account/);
+  assert.match(html, /Name :<\/span> Pedro Cisneros/);
+  assert.match(html, /Service Type :<\/span> Residential/);
+  assert.doesNotMatch(html, /Job completed</);
+  assert.doesNotMatch(html, /Missed/);
+  assert.doesNotMatch(html, /Download PDF/);
+  assert.doesNotMatch(html, /Balance Due/);
+});
+
 test("client completed email with no deposit paid has no buttons", () => {
-  const { subject, html } = renderJobCompletedEmail("Pedro", notice, "unpaid");
+  const { subject, html } = renderJobCompletedEmail("client", "Pedro", notice, "unpaid");
   assert.equal(subject, "Your job has been completed — Clean Up Company");
   assert.match(html, />JOB COMPLETED</);
   assert.match(html, /Hello Pedro,/);
@@ -275,7 +290,7 @@ test("client completed email with no deposit paid has no buttons", () => {
 });
 
 test("client completed email with a paid deposit asks for the remaining balance", () => {
-  const { subject, html } = renderJobCompletedEmail("Pedro", notice, "remaining");
+  const { subject, html } = renderJobCompletedEmail("client", "Pedro", notice, "remaining");
   assert.equal(subject, "Your job has been completed — Clean Up Company");
   assert.match(html, />JOB COMPLETED</);
   assert.match(html, /There is a remaining balance due for this job/);

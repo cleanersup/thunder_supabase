@@ -733,7 +733,11 @@ serve(async (req) => {
         logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "sent", template });
       }
     } else if (newStatus === "completed") {
-      const ownerMail = buildOwnerEmail(row, companyName, prev, newStatus);
+      const depositPaid = await depositInvoiceWasPaid(supabase, row.deposit_invoice_id);
+      const notice = confirmationNotice(row, companyName, timezone, null);
+      const balance = depositPaid ? "remaining" : "unpaid";
+      const ownerFirst = personFirstName(profile?.first_name) || "there";
+      const ownerMail = renderJobCompletedEmail("owner", ownerFirst, notice, balance);
       await sendEmailViaSMTP(ownerEmail, ownerMail.subject, ownerMail.html, ownerEmail);
       sent.push("owner");
       logJobMessage("status_email", { ...base, audience: "owner", channel: "email", result: "sent", template: "job_completed" });
@@ -743,12 +747,11 @@ serve(async (req) => {
       } else if (!shouldSendClientEmail(clientChannel)) {
         logJobMessage("status_email", { ...base, audience: "client", channel: "email", result: "skipped", reason: "client_channel", clientChannel: clientChannel ?? null });
       } else {
-        const depositPaid = await depositInvoiceWasPaid(supabase, row.deposit_invoice_id);
-        const notice = confirmationNotice(row, companyName, timezone, null);
         const clientMail = renderJobCompletedEmail(
+          "client",
           personFirstName(row.client_name) || "there",
           notice,
-          depositPaid ? "remaining" : "unpaid",
+          balance,
         );
         await sendEmailViaSMTP(row.client_email, clientMail.subject, clientMail.html, ownerEmail);
         sent.push("client");
